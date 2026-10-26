@@ -1,0 +1,20 @@
+# 核心依赖：全部用 pip wheel，GDAL/PROJ 由 rasterio 与 pyproj 各自静态打包
+# 硬约束：GDAL 只能有一份，不要混 conda，也不要另装 gdal 包
+numpy>=1.26
+scipy>=1.11
+rasterio>=1.3
+scikit-image>=0.22
+shapely>=2.0
+pyproj>=3.6
+
+# 第二阶段（SAR）再放开
+# hyp3-sdk>=6.0
+
+# 第三阶段（界面）：spike 已通过（scripts/ui_spike.py），解锁界面依赖
+# pyqtgraph 等 spike 之后的曲线层再放开
+PySide6>=6.7
+matplotlib>=3.8
+
+# 第四阶段（报告）再放开
+# python-docx>=1.1
+# jinja2>=3.1

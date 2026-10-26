@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.zcode/
+.workbuddy-ai/
+data/raw/*
+data/spike/*
+data/interim/*
+data/processed/*
+!data/raw/.gitkeep
+output/*
+!output/.gitkeep

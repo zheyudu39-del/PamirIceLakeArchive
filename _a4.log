@@ -1,0 +1,129 @@
+$ D:\challenge_cup\.venv\Scripts\python.exe -m glof.ui --smoke   (cwd=D:\challenge_cup)
+  [PASS] Main.qml 加载出根窗口
+== 步骤 1 / 按钮驱动提取（契约参数，预期 0 条）==
+  [PASS] 找到参数输入框
+  [PASS] 点击 提取湖泊 按钮
+  [PASS] extracted/failed 在 30s 内到达   kind=ok
+  [PASS] 契约参数 (0.15, 0.005) 提取 0 条（该景 NDWI max≈0.167 的真实结果）   0 条，耗时 0.4s
+  [PASS] busyExtract 复位
+  [PASS] lastError 为空
+  [PASS] progressText 报告完成   提取完成：0 个水体
+== 步骤 2 / threshold=0.05 复提（拿到记录驱动联动）==
+  [PASS] threshold=0.05 提取完成   kind=ok
+  [PASS] 拿到 ≥1 条记录   1 条
+  [PASS] 地图多边形数 == 记录数   1 == 1
+  [PASS] 湖泊表行数 == 记录数   1 == 1
+  [PASS] QML Repeater 消费了多边形   count=1
+  [PASS] 换景后地图影像就绪
+  [PASS] selectLake 后地图只高亮该湖   [1] 期望 [1]
+  [PASS] 找到 LakeTable 实例
+  [PASS] map.lakeClicked → table.highlightedId 跟随   highlightedId=1 期望 1
+  [PASS] map.lakeClicked → table.selectRow 选中该行   selectedRow=0 期望 0
+  [PASS] map.lakeClicked(-1) → 取消表格选中   highlightedId=-1
+  [PASS] 点击 湖泊列表 页签切页
+  [PASS] 表格行 delegate 可点（有窗口坐标）   中心=(49,565)
+  [PASS] 点击表格行 → 地图高亮切到该湖   [1] 期望 [1]
+  [PASS] 悬停图内 → 状态栏显示经纬度   悬停：77.22529°E, 35.67947°N
+  [PASS] 悬停图外 → 状态栏显示 —   悬停：—
+== 步骤 3 / 满载提取（data/spike T43SFV，契约参数）==
+  [PASS] 满载提取完成   kind=ok
+  [PASS] 满载记录 ≥1   248 条，耗时 10.1s
+  [PASS] 满载后表格行数同步   248 == 248
+== 步骤 4 / 检索时序按钮（空年份区间，不联网）==
+  [PASS] 点击 检索时序 按钮
+  [PASS] seriesFinished 在 30s 内到达（空年份立即返回）   kind=ok
+  [PASS] 序列为空且无错误   0 期, lastError=''
+  [PASS] busySeries 复位
+  [PASS] SeriesChart 回到空态
+== 步骤 5 / 截图 ==
+  [PASS] 切到 湖泊列表 页签（截图状态）
+  [PASS] app.png 已保存且非空   1000560 bytes
+  [PASS] QML 全程零警告
+
+共 35 项断言，通过 35 项
+APP SMOKE PASS
+--- 子进程 stderr ---
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 2 (EDIT). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 0 (BUTTON). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+OpenThemeData() failed for theme 4 (LISTVIEW). (�����Ч��)
+
+
+子进程退出码 0，耗时 13.0s；截图 output\ui_smoke\app.png 1000560 bytes
+APP SMOKE PASS

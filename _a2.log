@@ -1,0 +1,9 @@
+[步骤1] QtCharts 最小 QML 加载+抓帧 OK（59 ms，QApplication + offscreen + software）
+[步骤2] 13 点入控制器；plateau=1.8254 km²（区间 [1.7,1.9] 内）；chartClicked 直调 -> pointClicked 收到 '2018-08-06'
+[步骤2-QML] 曲线 13 点上屏；高亮 1 点；plotArea(513x333) 就近取点 -> pointClicked('2018-08-06')
+[步骤3a] ExtractWorker（任务书参数 threshold=0.15, min=0.005）：0 个水体（实测 NDWI max=0.167，低于阈值，0 个是真实结果）；progress 4 条；场景 285x906
+[步骤3b] ExtractWorker（threshold=0.05, min=0.005）：1 个水体（#1 0.0158 km² / 158 px / mean_ndwi=0.069）
+[步骤4] SeriesWorker years=[] -> finished_pts([])，耗时 11 ms；cancel() 未误报（诚实语义成立）
+[附加] clear() -> QML 空态(shownPoints=0, hasData=False) -> set_series 恢复 13 点 + 高亮 1 点
+[步骤5] 截图 output\ui_smoke\series.png（760x480）
+SERIES SMOKE PASS
