@@ -91,16 +91,28 @@ def make_scene(
     ny = max(1, int(round(n * _H_M / _W_M)))
     transform = Affine.translation(_X0, _Y0 + h_m) * Affine.scale(w_m / nx, -h_m / ny)
 
+    # 加一点确定性纹理（固定种子，可复现）。全幅常数会让 2%–98% 百分位拉伸
+    # 把整张图拉成黑 —— 那是合成数据不真实，不是拉伸有问题：真实影像有纹理。
+    rng = np.random.default_rng(20261102)
+    tex = (rng.normal(0.0, 0.02, size=(ny, nx))).astype(np.float32)
+
     data = {
-        "green": np.full((ny, nx), green, dtype=np.float32),
-        "nir": np.full((ny, nx), nir, dtype=np.float32),
-        "swir1": np.full((ny, nx), swir1, dtype=np.float32),
+        "green": np.full((ny, nx), green, dtype=np.float32) + tex,
+        "nir": np.full((ny, nx), nir, dtype=np.float32) + tex,
+        "swir1": np.full((ny, nx), swir1, dtype=np.float32) + tex,
+        # 真彩色：with_image=True 时 fetch_latest 会读 blue/green/red，
+        # 界面靠这三个波段渲染影像。合成景必须一并给出，否则测不到显示链路。
+        "blue": np.full((ny, nx), 0.25, dtype=np.float32) + tex,
+        "red": np.full((ny, nx), 0.30, dtype=np.float32) + tex,
     }
     # 中间放一块"湖"：water_block² 像元，约 (water_block × 27 m)²
     if water_block > 0:
         lo_y = ny // 2 - water_block // 2
         lo_x = nx // 2 - water_block // 2
-        for arr, value in (("green", 0.06), ("nir", 0.01), ("swir1", 0.008)):
+        for arr, value in (
+            ("green", 0.06), ("nir", 0.01), ("swir1", 0.008),
+            ("blue", 0.05), ("red", 0.03),
+        ):
             data[arr][lo_y:lo_y + water_block, lo_x:lo_x + water_block] = value
     return gio.Scene(
         path="<synthetic>", data=data, transform=transform, crs=UTM,
@@ -272,6 +284,50 @@ def test_no_lake_is_none():
           obs.total_area_km2 is None, repr(obs.total_area_km2))
     check("largest_area_km2 同样是 None", obs.largest_area_km2 is None)
     check("usable 为 False", not obs.usable)
+
+
+def test_image_returned():
+    """默认必须把影像带回来 —— 用户要的是"看到湖"，只有数字不够。
+
+    这条守的是一个需求偏差：第一版只返回面积数字，界面上没有任何图。
+    影像链路缺了 LatestObservation.scene，MapController.set_scene 就拿不到东西。
+    """
+    print("\n[4c] 默认带回影像，可供界面显示")
+    scene = make_scene(coverage_scale=2.0, water_block=20)
+    obs = with_fakes(
+        [_ref("2026-08-10", 5.0)],
+        lambda _s: scene,
+        lambda: glatest.fetch_latest(BBOX, today=date(2026, 8, 12)),
+    )
+    assert obs is not None
+    check("scene 不为 None", obs.scene is not None)
+    check("ndwi 不为 None", obs.ndwi is not None)
+    check("scene 带真彩色波段（red/green/blue）",
+          obs.scene.has("red", "green", "blue"),
+          str(sorted(obs.scene.data)))
+    check("ndwi 形状与 scene 一致", obs.ndwi.shape == obs.scene.shape,
+          f"{obs.ndwi.shape} vs {obs.scene.shape}")
+
+    # 真的能渲染成图：这条断言直接把 ui.imagery 的转换跑一遍。
+    # 只验数组到 uint8 那一步（QPixmap 需要 QGuiApplication，离线脚本不建）。
+    from glof.ui.imagery import stretch_rgb
+
+    rgb = stretch_rgb(obs.scene["red"], obs.scene["green"], obs.scene["blue"])
+    check("能拉伸成 uint8 RGB", rgb.dtype == np.uint8 and rgb.shape[2] == 3,
+          f"{rgb.dtype} {rgb.shape}")
+    check("图不是全黑（拉伸有效）", int(rgb.max()) > 0, f"max={rgb.max()}")
+
+    # with_image=False 时省掉影像，且不多读波段
+    obs2 = with_fakes(
+        [_ref("2026-08-10", 5.0)],
+        lambda _s: scene,
+        lambda: glatest.fetch_latest(BBOX, today=date(2026, 8, 12), with_image=False),
+    )
+    assert obs2 is not None
+    check("with_image=False 时不带 scene", obs2.scene is None)
+    check("with_image=False 时不带 ndwi", obs2.ndwi is None)
+    check("with_image=False 仍能算面积", obs2.total_area_km2 is not None,
+          repr(obs2.total_area_km2))
 
 
 def test_ordering():
@@ -611,6 +667,7 @@ def main() -> int:
     test_frozen_is_none_not_zero()
     test_water_detected()
     test_no_lake_is_none()
+    test_image_returned()
     test_ordering()
     test_coverage_gate()
     test_quality_gate()

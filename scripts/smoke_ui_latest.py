@@ -89,7 +89,41 @@ def wait_until(app: QApplication, predicate, timeout_s: float) -> bool:
     return bool(predicate())
 
 
+def make_scene():
+    """造一景合成影像，供"最新观测"把图送到地图用。
+
+    真实链路是 fetch_latest(with_image=True) -> LatestObservation.scene ->
+    AppState._on_latest_finished -> MapController.set_scene -> RasterImageProvider
+    -> QML Image。桩里不带 scene 的话，整条显示链路一行都测不到。
+    """
+    import numpy as np
+    from affine import Affine
+
+    from glof.core.io import Scene
+
+    n = 60
+    rng = np.random.default_rng(7)
+    tex = rng.normal(0.0, 0.02, size=(n, n)).astype(np.float32)
+    transform = Affine.translation(77.16, 35.71) * Affine.scale(0.001, -0.001)
+    data = {
+        "green": np.full((n, n), 0.33, dtype=np.float32) + tex,
+        "red": np.full((n, n), 0.30, dtype=np.float32) + tex,
+        "blue": np.full((n, n), 0.25, dtype=np.float32) + tex,
+        "nir": np.full((n, n), 0.41, dtype=np.float32) + tex,
+        "swir1": np.full((n, n), 0.30, dtype=np.float32) + tex,
+    }
+    return Scene(path="<smoke>", data=data, transform=transform, crs="EPSG:4326",
+                 reflectance_scale=1.0, target_resolution=10.0)
+
+
 def make_record(lake_id: int, area_km2: float, lon: float, lat: float) -> LakeRecord:
+    """造一条湖记录，带真实的多边形几何（地图要画轮廓，`{}` 画不出来）。"""
+    import json
+
+    d = 0.004
+    ring = [[lon - d, lat - d], [lon + d, lat - d], [lon + d, lat + d],
+            [lon - d, lat + d], [lon - d, lat - d]]
+    geom = {"type": "Polygon", "coordinates": [ring]}
     return LakeRecord(
         lake_id=lake_id,
         area_m2=area_km2 * 1e6,
@@ -99,7 +133,7 @@ def make_record(lake_id: int, area_km2: float, lon: float, lat: float) -> LakeRe
         mean_ndwi=0.4,
         centroid_lon=lon,
         centroid_lat=lat,
-        geometry_wgs84_json="{}",
+        geometry_wgs84_json=json.dumps(geom),
     )
 
 
@@ -112,10 +146,11 @@ class FakeFetch:
         self.result: LatestObservation | None = None
 
     def __call__(self, bbox, *, lookback_days=20, max_cloud=20.0,
-                 min_area_km2=0.01, today=None, progress=None):
+                 min_area_km2=0.01, today=None, with_image=True, progress=None):
         self.calls.append({
             "bbox": tuple(bbox), "lookback_days": lookback_days,
             "max_cloud": max_cloud, "min_area_km2": min_area_km2,
+            "with_image": with_image,
         })
         if progress is not None:
             progress("冒烟桩：检索影像")
@@ -260,6 +295,7 @@ def main() -> int:
             largest_area_km2=1.0,
             ndwi_max=0.62,
             season_warning="",
+            scene=make_scene(),
         )
         fake.gate.clear()
         button.clicked.emit()
@@ -285,6 +321,32 @@ def main() -> int:
         check("QML 提示行隐藏（无警告）", not label_visible(win, "latestMessageLabel"))
         check("QML 空态行隐藏", not label_visible(win, "latestEmptyLabel"))
         check("结果区可见", label_visible(win, "latestPanel"))
+
+        # ---- 影像真的送到地图了（用户要的核心：看到湖的状态）----
+        # 链路：fetch_latest(with_image=True) -> LatestObservation.scene ->
+        #       AppState._on_latest_finished -> MapController.set_scene ->
+        #       RasterImageProvider -> QML Image
+        check("桩确实被要求带影像", fake.calls and fake.calls[-1].get("with_image") is True,
+              str(fake.calls[-1] if fake.calls else None))
+        m = state.property("map")
+        check("地图换上了这一景", m is not None and int(m.property("imageWidth")) > 0,
+              f"{m.property('imageWidth') if m else None}x"
+              f"{m.property('imageHeight') if m else None}")
+        check("地图图片 URL 已刷新（缓存键变了）",
+              m is not None and str(m.property("imageUrl")).startswith("image://raster/"),
+              str(m.property("imageUrl")) if m else "")
+        check("地图装上了 2 个湖的多边形",
+              m is not None and len(m.property("polygons")) == 2,
+              str(len(m.property("polygons"))) if m else "")
+        check("地图宽高与合成景一致",
+              m is not None and int(m.property("imageWidth")) == 60
+              and int(m.property("imageHeight")) == 60,
+              f"{m.property('imageWidth') if m else None}x"
+              f"{m.property('imageHeight') if m else None}")
+        # provider 里真的有一张非空 pixmap，不是空壳
+        pm = m._provider._pixmap if m is not None else None
+        check("图片提供器里有非空 pixmap", pm is not None and not pm.isNull(),
+              "null" if pm is None else f"{pm.width()}x{pm.height()}")
 
         # ---- 失败路径：worker 抛异常 -> failed -> latestMessage 写明 ----
         print("== 步骤 5 / 异常路径（桩抛异常）==", flush=True)

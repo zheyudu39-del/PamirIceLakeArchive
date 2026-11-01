@@ -627,6 +627,27 @@ class AppState(QObject):
                 self._latest_message = "窗口内无水面信号（冰封或已排空），面积没量到"
             else:
                 self._latest_message = ""
+            # 把影像和湖泊轮廓送上地图 —— 用户要的是"看到湖的状态"，
+            # 只给面积数字不够。顺序与 _on_extracted 一致：先 scene 后 lakes，
+            # set_lakes 依赖 set_scene 记下的几何基准。
+            scene = getattr(obs, "scene", None)
+            if scene is not None:
+                self._map.set_scene(scene)
+                # 轮廓画不出来（几何缺失/损坏）不该把已经算好的面积一起吞掉：
+                # 影像已经上屏，表格也照常填，只是地图上没有那圈线。
+                try:
+                    self._map.set_lakes(obs.records)
+                except Exception as exc:  # noqa: BLE001 - 坏几何只影响轮廓
+                    self._set_last_error(
+                        f"湖泊轮廓无法绘制（{type(exc).__name__}: {exc}），面积不受影响")
+                self._lakes.set_records(obs.records)
+                # 换景即作废旧选中：新景的 LakeRecord 是新对象，旧 id 指不准谁
+                if self._selected_lake is not None:
+                    self._selected_lake = None
+                    self._selected_risk = ""
+                    self._map.highlight(-1)
+                    self.selectedLakeChanged.emit()
+                    self.selectedLakeRiskChanged.emit()
             self._set_progress_text(
                 f"最新观测：{obs.observed_on}（距今 {obs.age_days} 天）")
         # 字段与 busy 位在同一次 NOTIFY 里交付，QML 不会先看到"不忙了"再闪旧值

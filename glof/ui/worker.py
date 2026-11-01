@@ -156,6 +156,8 @@ class LatestWorker(QThread):
                 lookback_days=self._lookback_days,
                 max_cloud=self._max_cloud,
                 min_area_km2=self._min_area_km2,
+                # 界面要显示影像本身，不只是面积数字
+                with_image=True,
                 progress=self.progressed.emit,
             )
         except Exception as exc:  # noqa: BLE001 - 线程边界：异常必须转成信号过线

@@ -163,6 +163,13 @@ class LatestObservation:
         窗口内 NDWI 最大值。是解释"为什么没量到"的旁证。
     season_warning
         非消融期提示；空串表示无异常。
+    scene
+        这一景的 ``Scene``（含 red/green/blue/nir/swir1），供界面显示真彩色
+        影像与湖泊轮廓。**None 表示调用方没要影像**（``with_image=False``），
+        不是"读不到"。用户要的是"看到湖的状态"，只有数字不够。
+    ndwi
+        窗口 NDWI 数组，形状与 ``scene`` 一致。界面可以据此叠一层水体高亮。
+        ``scene`` 为 None 时它也是 None。
     """
 
     observed_on: str
@@ -176,6 +183,8 @@ class LatestObservation:
     largest_area_km2: float | None = None
     ndwi_max: float = float("nan")
     season_warning: str = ""
+    scene: object | None = None
+    ndwi: object | None = None
 
     @property
     def n_lakes(self) -> int:
@@ -246,6 +255,7 @@ def fetch_latest(
     max_cloud: float = DEFAULT_MAX_CLOUD,
     min_area_km2: float = 0.01,
     today: date | None = None,
+    with_image: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> LatestObservation | None:
     """拉取研究区最近一景可用影像并提取当前湖泊。
@@ -264,6 +274,11 @@ def fetch_latest(
     today
         基准日期，默认今天。显式传入是为了让测试可复现——
         依赖 ``date.today()`` 的测试第二天就会挂。
+    with_image
+        是否把影像本身带回来（``LatestObservation.scene``）。
+        默认 True——用户要的是"看到湖的状态"，只给数字不够。
+        设 False 时只读 green/nir/swir1 三个波段（省约 1/3 流量），
+        适合批量或纯统计场景。
     progress
         可选回调，签名 ``progress(message)``。
 
@@ -302,8 +317,12 @@ def fetch_latest(
 
     rejected: list[str] = []
     for ref in refs[:MAX_CANDIDATES]:
+        # 要影像显示就得读真彩色（red/green/blue）；只统计时省掉 red/blue。
+        # 实测单景 9–30 s 且瓶颈是下行带宽（docs/时序检索为什么慢.md），
+        # 多读两个波段约多花 1/3 时间——为了"看到湖"这个核心需求，值得。
+        bands = ("blue", "green", "red", "nir", "swir1") if with_image else SERIES_BANDS
         try:
-            sources, headers = gstac.sign_scene(ref, bands=SERIES_BANDS)
+            sources, headers = gstac.sign_scene(ref, bands=bands)
             scene = gio.load_scene(
                 sources, S2_L2A_6BAND, bounds=bbox, http_headers=headers or None,
             )
@@ -381,6 +400,8 @@ def fetch_latest(
             largest_area_km2=largest,
             ndwi_max=ndwi_max,
             season_warning=warn,
+            scene=scene if with_image else None,
+            ndwi=n if with_image else None,
         )
 
     # 拒因要如实说出来：用户看到"暂无可用观测"时，得知道是没景、只擦边、
