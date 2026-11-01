@@ -298,6 +298,7 @@ def cmd_latest(args: argparse.Namespace) -> int:
     * ``total_area_km2`` 为 None 是「没量到」，绝不能显示成 0。
     """
     from .core.latest import FROZEN_NDWI_MAX, fetch_latest
+    from .core.timeseries import NDWI_THRESHOLD, NIR_MAX
 
     bbox = [float(v) for v in args.bbox]
 
@@ -380,10 +381,16 @@ def cmd_latest(args: argparse.Namespace) -> int:
         print(f"  {_pad('场景', 10)}{obs.scene_id}")
 
         if obs.total_area_km2 is None:
-            # 没量到 ≠ 面积为 0。把 NDWI 最大值一并给出，说明"为什么没量到"。
+            # 没量到 ≠ 面积为 0。但"没量到"有两种成因，措辞必须分开——
+            # 把 NDWI 最大值说成"低于门限"而它其实高于门限，就是在撒谎。
             ndwi_txt = "无效" if ndwi_max is None else f"{ndwi_max:.3f}"
-            print(f"  {_pad('面积', 10)}没量到。窗口内 NDWI 最大值 {ndwi_txt}，"
-                  f"低于 {FROZEN_NDWI_MAX:g}，说明没有水面信号。")
+            if ndwi_max is None or ndwi_max < FROZEN_NDWI_MAX:
+                why = f"低于 {FROZEN_NDWI_MAX:g}，说明没有水面信号"
+            else:
+                why = (f"高于 {FROZEN_NDWI_MAX:g}，但按判水口径"
+                       f"（NDWI>{NDWI_THRESHOLD:g} 且 NIR<{NIR_MAX:g}）"
+                       f"没有提出可信水体")
+            print(f"  {_pad('面积', 10)}没量到。窗口内 NDWI 最大值 {ndwi_txt}，{why}。")
             print(f"  {_pad('说明', 10)}这是「没量到」，不是「面积为零」；"
                   f"冰封或无水面信号时面积不可用。")
         else:
