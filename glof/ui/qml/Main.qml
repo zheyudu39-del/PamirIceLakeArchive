@@ -224,7 +224,10 @@ ApplicationWindow {
                         TextField {
                             id: year0Field
                             objectName: "year0Field"
-                            text: "2016"
+                            // 默认 3 年而不是 10 年：实测单景 9–30 s、一年 15–25 个
+                            // 日期，10 年要跑半小时以上（docs/时序检索为什么慢.md）。
+                            // 默认值应该是"点下去能等到结果"的那个量级。
+                            text: "2023"
                             Layout.preferredWidth: 78
                             selectByMouse: true
                         }
@@ -236,6 +239,18 @@ ApplicationWindow {
                             Layout.preferredWidth: 78
                             selectByMouse: true
                         }
+                    }
+
+                    // 代价提示：联网读一景 9–30 s，一年 15–25 个日期。
+                    // 不给这个数，用户会以为"等 10 分钟没反应"是程序卡了。
+                    Label {
+                        objectName: "seriesCostLabel"
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        font.pixelSize: 11
+                        color: "#5f6368"
+                        text: "联网读景，每年约 1–4 分钟（单景 9–30 秒）。"
+                              + "每年数越多越慢，建议先跑 1 年看看。"
                     }
 
                     RowLayout {

@@ -194,8 +194,11 @@ def build_series(
             progress(message)
 
     points: list[SeriesPoint] = []
+    total = len(years_list := list(years))
 
-    for year in years:
+    for year_idx, year in enumerate(years_list, start=1):
+        # 每年开头报一次：检索本身要 2 秒，年份多的时候光检索就很久。
+        emit(f"[{year_idx}/{total}] {year} 检索中 …")
         try:
             refs = gstac.search_sentinel2(
                 bbox,
@@ -216,7 +219,14 @@ def build_series(
         for ref in refs:
             by_date.setdefault(ref.date, []).append(ref)
 
-        for date in sorted(by_date):
+        dates = sorted(by_date)
+        emit(f"[{year_idx}/{total}] {year} 共 {len(dates)} 个日期，开始读取")
+        for date_idx, date in enumerate(dates, start=1):
+            # 每个日期都报一次进度。这不只是"好看"：cancel() 只在 progress
+            # 回调进入时才能中断（见 worker.py），没有回调点就没有中断点。
+            # 原先只在失败时 emit，导致 10 年检索既看不到进度、也取消不了。
+            emit(f"[{year_idx}/{total}] {year} {date} "
+                 f"({date_idx}/{len(dates)}) 读取中 …")
             best: SeriesPoint | None = None
             for ref in by_date[date]:
                 try:
