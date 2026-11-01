@@ -114,8 +114,15 @@ _checks: list[tuple[str, bool, str]] = []
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
     _checks.append((name, bool(ok), detail))
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"   {detail}" if detail else ""),
-          flush=True)
+    # Windows 控制台默认 GBK，打印 "km²" 的 ²（U+00B2）会抛 UnicodeEncodeError。
+    # 断言已经记进 _checks 了，让打印本身把进程带崩毫无道理——退回替换字符。
+    try:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"   {detail}" if detail else ""),
+              flush=True)
+    except UnicodeEncodeError:
+        enc = sys.stdout.encoding or "ascii"
+        line = f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"   {detail}" if detail else "")
+        print(line.encode(enc, "replace").decode(enc), flush=True)
     return bool(ok)
 
 

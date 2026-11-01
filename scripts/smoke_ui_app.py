@@ -47,7 +47,10 @@ def main() -> int:
         text=True,
         encoding="utf-8",
         errors="replace",
-        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        # 子进程必须用 UTF-8 输出：父进程按 utf-8 解码，而 Windows 控制台
+        # 默认 GBK，不强制就会把中文断言名解成乱码，连"步骤 5 / 风险接线"
+        # 这种关键锚点都匹配不上。
+        env={**os.environ, "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8"},
     )
     elapsed = time.perf_counter() - t0
 

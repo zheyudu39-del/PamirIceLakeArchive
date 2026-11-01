@@ -15,6 +15,9 @@
     # 对面积时序逐期做风险分级（留出法估平台，阈值可覆盖、可做敏感性）
     python -m glof.cli risk --input output/kyagar/kyagar_area_series.csv \\
         --lake-type ice --sensitivity --out output/risk
+
+    # 最新可用观测（不是"实时"：影像有拍摄日期，会明确告诉你是几天前的）
+    python -m glof.cli latest --bbox 77.16 35.65 77.22 35.71 --days 60
 """
 
 from __future__ import annotations
@@ -283,6 +286,128 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         manifest.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n清单      : {manifest}")
         print(f"下一步    : python -m glof.cli extract --input {saved[0]['file']} --out output/real1")
+    return 0
+
+
+def cmd_latest(args: argparse.Namespace) -> int:
+    """打印研究区的「最新可用观测」。
+
+    措辞上的三条硬规矩（见 docs/最新观测契约.md）：
+    * 一律叫「最新可用观测」，不叫"实时"——影像有拍摄日期，必须显示距今几天；
+    * ``fetch_latest`` 返回 None 是「没有可用影像」，不是「没有湖」；
+    * ``total_area_km2`` 为 None 是「没量到」，绝不能显示成 0。
+    """
+    from .core.latest import FROZEN_NDWI_MAX, fetch_latest
+
+    bbox = [float(v) for v in args.bbox]
+
+    def progress(msg: str) -> None:
+        # 进度固定走 stderr：--json 时 stdout 只能有那一段 JSON
+        print(f"  {msg}", file=sys.stderr)
+
+    obs = fetch_latest(
+        bbox,
+        lookback_days=args.days,
+        max_cloud=args.max_cloud,
+        min_area_km2=args.min_area_km2,
+        progress=progress,
+    )
+
+    # --json 时人读的附注改走 stderr，别污染 stdout
+    def note(text: str) -> None:
+        print(text, file=sys.stderr if args.json else sys.stdout)
+
+    if obs is None:
+        message = (
+            f"最近 {args.days} 天内没有可用观测（云量上限 {args.max_cloud:g}%）。"
+            f"这不是\"没有湖\"，是没有可用影像。"
+        )
+        if args.json:
+            print(json.dumps(
+                {
+                    "observed_on": None,
+                    "age_days": None,
+                    "scene_id": None,
+                    "tile": None,
+                    "cloud": None,
+                    "coverage": None,
+                    "n_lakes": None,
+                    "total_area_km2": None,
+                    "largest_area_km2": None,
+                    "ndwi_max": None,
+                    "season_warning": None,
+                    "message": message,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ))
+        else:
+            print("最新可用观测")
+            print(f"  {message}")
+            print("  可试：放宽 --max-cloud、加大 --days，或换更小/更靠谷底的 --bbox。")
+        return 1
+
+    ndwi_max = None if not np.isfinite(obs.ndwi_max) else round(obs.ndwi_max, 4)
+
+    if args.json:
+        print(json.dumps(
+            {
+                "observed_on": obs.observed_on,
+                "age_days": obs.age_days,
+                "scene_id": obs.scene_id,
+                "tile": obs.tile,
+                "cloud": round(obs.cloud, 2),
+                "coverage": round(obs.coverage, 4),
+                "n_lakes": obs.n_lakes,
+                # None 必须原样保留成 null，不能兜底成 0
+                "total_area_km2": (
+                    None if obs.total_area_km2 is None else round(obs.total_area_km2, 4)
+                ),
+                "largest_area_km2": (
+                    None if obs.largest_area_km2 is None else round(obs.largest_area_km2, 4)
+                ),
+                "ndwi_max": ndwi_max,
+                "season_warning": obs.season_warning,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ))
+    else:
+        print("最新可用观测")
+        print(f"  {_pad('观测日期', 10)}{obs.observed_on}（距今 {obs.age_days} 天）")
+        print(f"  {_pad('云量', 10)}{obs.cloud:.1f}%   覆盖率 {obs.coverage:.0%}")
+        print(f"  {_pad('瓦片', 10)}{obs.tile}")
+        print(f"  {_pad('场景', 10)}{obs.scene_id}")
+
+        if obs.total_area_km2 is None:
+            # 没量到 ≠ 面积为 0。把 NDWI 最大值一并给出，说明"为什么没量到"。
+            ndwi_txt = "无效" if ndwi_max is None else f"{ndwi_max:.3f}"
+            print(f"  {_pad('面积', 10)}没量到。窗口内 NDWI 最大值 {ndwi_txt}，"
+                  f"低于 {FROZEN_NDWI_MAX:g}，说明没有水面信号。")
+            print(f"  {_pad('说明', 10)}这是「没量到」，不是「面积为零」；"
+                  f"冰封或无水面信号时面积不可用。")
+        else:
+            largest = (
+                "没量到" if obs.largest_area_km2 is None
+                else f"{obs.largest_area_km2:.2f} km²"
+            )
+            print(f"  {_pad('湖泊', 10)}{obs.n_lakes} 个，"
+                  f"总面积 {obs.total_area_km2:.2f} km²，最大 {largest}")
+
+        # 量到了也要提示非消融期；没量到时同样要说明原因
+        if obs.season_warning:
+            print(f"  {_pad('提示', 10)}{obs.season_warning}")
+
+    if args.save:
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if obs.records:
+            geo = gio.save_geojson(obs.records, out_dir / "lakes.geojson")
+            csv_path = gio.save_csv(obs.records, out_dir / "lakes.csv")
+            note(f"输出      : {geo}")
+            note(f"            {csv_path}")
+        else:
+            note("没有可落盘的湖泊：本条观测没量到水体，不是「湖是空的」。")
     return 0
 
 
@@ -693,6 +818,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_fetch.add_argument("--platform", default="pc", choices=["pc", "cdse"], help="资产命名规范")
     p_fetch.add_argument("--token", default=None, help="CDSE 的 Bearer token（PC 不需要）")
     p_fetch.set_defaults(func=cmd_fetch)
+
+    p_latest = sub.add_parser(
+        "latest",
+        help="打印研究区的最新可用观测（影像有拍摄日期，会显示距今几天）",
+    )
+    p_latest.add_argument(
+        "--bbox",
+        nargs=4,
+        type=float,
+        required=True,
+        metavar=("LON_MIN", "LAT_MIN", "LON_MAX", "LAT_MAX"),
+        help="研究区范围（WGS84 经纬度）",
+    )
+    p_latest.add_argument("--days", type=int, default=20,
+                          help="往前检索多少天（默认 20；重访 5 天，留出连续多云的余量）")
+    p_latest.add_argument("--max-cloud", type=float, default=20.0,
+                          help="整景云量上限（%%），默认 20")
+    p_latest.add_argument("--min-area-km2", type=float, default=0.01,
+                          help="最小面积过滤（km²），默认 0.01（与产品口径一致）")
+    p_latest.add_argument("--json", action="store_true",
+                          help="输出机器可读 JSON 到 stdout；进度与提示改走 stderr")
+    p_latest.add_argument("--save", action="store_true",
+                          help="把提取结果落成 GeoJSON + CSV（与 extract 同一套格式）")
+    p_latest.add_argument("--out", default="output/latest",
+                          help="--save 的输出目录")
+    p_latest.set_defaults(func=cmd_latest)
 
     p_inv = sub.add_parser("inventory", help="从 ICIMOD HMA GLOF 数据库筛研究区溃决湖")
     p_inv.add_argument("--db", default="data/raw/GLOF database of High Mountain Asia.zip",

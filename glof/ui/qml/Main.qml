@@ -8,7 +8,11 @@
 //        buildSeries([x0,y0,x1,y1], year0, year1)（也支持四个 real 的形状；
 //        有选中湖时检索窗口用湖心 ±0.03°，见 app_state.PAD_DEG）、
 //        cancelSeries()（请求取消时序检索）、selectLake(lakeId)（记住选中湖，
-//        时序判定回流经 selectedLakeRisk 显示在状态栏）。
+//        时序判定回流经 selectedLakeRisk 显示在状态栏）、
+//        refreshLatest([x0,y0,x1,y1], lookbackDays)（联网取最近一景，结果经
+//        latestDate / latestAgeDays / latestAreaKm2 / latestNLakes /
+//        latestMessage / latestBusy 显示；面积没量到时 latestAreaKm2 是 NaN，
+//        界面写"面积没量到（无水面信号）"，绝不显示 0.00 km²）。
 //   * 联动回环的防法（与 LakeTable.qml 文件头同一条注释）：
 //       表格点行 → table.lakeClicked → app.selectLake → 地图高亮；
 //       地图点湖 → app.map.lakeClicked → 这里调 table.selectRow（程序化选中
@@ -81,10 +85,27 @@ ApplicationWindow {
                 color: "white"
                 radius: 6
 
-                ColumnLayout {
+                // 面板内容比窗口高时（最小窗口 1100×700 实测）必须能滚：
+                // 直接 ColumnLayout 会把"最新观测"整段裁在可视区外，
+                // 用户以为按钮不存在。Flickable 不影响任何 objectName/绑定。
+                Flickable {
+                    id: panelFlick
+                    objectName: "panelFlick"
                     anchors.fill: parent
                     anchors.margins: 12
-                    spacing: 8
+                    contentWidth: width
+                    contentHeight: Math.max(panelColumn.implicitHeight, height)
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                    ColumnLayout {
+                        id: panelColumn
+                        // 右侧留 12px 给滚动条；内容不足一屏时仍撑满，
+                        // 底部的弹性占位继续把提示顶到面板底部（原行为）。
+                        width: panelFlick.width - 12
+                        height: Math.max(implicitHeight, panelFlick.height)
+                        spacing: 8
 
                     Label {
                         text: "影像提取"
@@ -244,6 +265,107 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // 分隔线
+                    Rectangle { Layout.fillWidth: true; height: 1; color: "#e8eaed" }
+
+                    // ---- 最新观测（联网，秒级到十几秒）----
+                    // 名字一律叫「最新观测」，不叫"实时"：Sentinel-2 重访 5 天 +
+                    // L2A 处理 1–3 天，叫实时是承诺做不到的事（docs/最新观测契约.md）。
+                    // 这里最要紧的是数据新鲜度：观测日期 + 距今 N 天永远显示，
+                    // 且"没量到"绝不显示成 0.00 km²（NaN 走单独一条文案）。
+                    Label {
+                        text: "最新观测（联网）"
+                        font.bold: true
+                        font.pixelSize: 14
+                        color: "#202124"
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Button {
+                            id: latestButton
+                            objectName: "latestButton"
+                            text: "刷新最新观测"
+                            enabled: !app.busyExtract && !app.busySeries && !app.latestBusy
+                            onClicked: app.refreshLatest(
+                                [Number(x0Field.text), Number(y0Field.text),
+                                 Number(x1Field.text), Number(y1Field.text)],
+                                app.latestLookbackDays)
+                        }
+                        BusyIndicator { running: app.latestBusy; visible: running }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // 加载中提示（照 seriesButton 的处理：busy 时显示一行）
+                    Label {
+                        objectName: "latestLoadingLabel"
+                        Layout.fillWidth: true
+                        visible: app.latestBusy
+                        text: "正在检索最新影像 …"
+                        wrapMode: Text.Wrap
+                        font.pixelSize: 11
+                        color: "#5f6368"
+                    }
+
+                    // 结果区。三种状态分开措辞：
+                    //   a) 没观测（latestAgeDays < 0）  -> "暂无可用观测"
+                    //   b) 有观测但没量到面积（NaN）    -> "面积没量到（无水面信号）" + 季节警告
+                    //   c) 正常                          -> 日期 / 距今天数 / 面积 / 湖泊数
+                    ColumnLayout {
+                        objectName: "latestPanel"
+                        Layout.fillWidth: true
+                        visible: !app.latestBusy && app.latestAgeDays >= 0
+                        spacing: 2
+
+                        // 新鲜度：日期 + 距今 N 天。这是本功能诚实性的核心。
+                        Label {
+                            objectName: "latestFreshnessLabel"
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 12
+                            font.bold: true
+                            color: "#202124"
+                            text: "观测日期 " + app.latestDate
+                                  + "　距今 " + app.latestAgeDays + " 天"
+                        }
+
+                        Label {
+                            objectName: "latestAreaLabel"
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 12
+                            // NaN 判断：QML 里 Number.isNaN 最稳；面积没量到时
+                            // 绝不显示 0.00 km²（缺数据返回 None 的项目硬规矩）。
+                            color: Number.isNaN(app.latestAreaKm2) ? "#b3261e" : "#1e8e3e"
+                            text: Number.isNaN(app.latestAreaKm2)
+                                  ? "面积没量到（无水面信号）"
+                                  : "当前面积 " + Number(app.latestAreaKm2).toFixed(4)
+                                    + " km²　湖泊 " + app.latestNLakes + " 个"
+                        }
+
+                        Label {
+                            objectName: "latestMessageLabel"
+                            Layout.fillWidth: true
+                            visible: app.latestMessage !== ""
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 11
+                            color: "#b3261e"
+                            text: app.latestMessage
+                        }
+                    }
+
+                    // a) 没观测：明确说"暂无可用观测"，不说"没有湖"
+                    Label {
+                        objectName: "latestEmptyLabel"
+                        Layout.fillWidth: true
+                        visible: !app.latestBusy && app.latestAgeDays < 0
+                                 && app.latestMessage !== ""
+                        wrapMode: Text.Wrap
+                        font.pixelSize: 11
+                        color: "#5f6368"
+                        text: app.latestMessage
+                    }
+
                     Item { Layout.fillHeight: true }  // 弹性占位，把提示顶到面板底部
 
                     Label {
@@ -254,6 +376,7 @@ ApplicationWindow {
                         wrapMode: Text.Wrap
                         font.pixelSize: 11
                         color: "#5f6368"
+                    }
                     }
                 }
             }

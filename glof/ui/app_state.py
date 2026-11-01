@@ -52,6 +52,11 @@ from typing import Any
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from glof.core.inventory import DEFAULT_DB_PATH, lake_profile
+from glof.core.latest import (
+    DEFAULT_LOOKBACK_DAYS,
+    DEFAULT_MAX_CLOUD,
+    LatestObservation,
+)
 from glof.core.risk import RiskAssessment
 from glof.core.risk_series import assess_series
 from glof.core.timeseries import SeriesPoint, estimate_plateau
@@ -59,9 +64,12 @@ from glof.core.water import LakeRecord
 from glof.ui.lake_model import LakeModel
 from glof.ui.map_controller import MapController
 from glof.ui.series_controller import SeriesController
-from glof.ui.worker import ExtractWorker, SeriesWorker
+from glof.ui.worker import ExtractWorker, LatestWorker, SeriesWorker
 
-__all__ = ["AppState", "DEFAULT_INPUT", "PROJECT_ROOT", "PAD_DEG"]
+__all__ = [
+    "AppState", "DEFAULT_INPUT", "PROJECT_ROOT", "PAD_DEG",
+    "LATEST_MIN_AREA_KM2", "LATEST_LOOKBACK_DAYS",
+]
 
 #: 项目根目录（glof/ui/app_state.py 向上三级）。相对路径的影像若按 CWD 找不到，
 #: 再按它找一遍——QML/快捷方式启动时 CWD 不一定是项目根。
@@ -79,6 +87,16 @@ EVENT_YEARS = (2018,)
 #: 选中湖时序检索窗口的半宽（度）。与 scripts/kyagar_series.py 的 PAD_DEG
 #: 同口径（0.03° 约 3.3 km）：太小会把堰塞湖截断，面积系统性偏小。
 PAD_DEG = 0.03
+
+#: 最新观测的最小面积门限（km²）。与 ``docs/最新观测契约.md`` 的
+#: ``fetch_latest(min_area_km2=0.01)`` 默认值一致，但这里显式传参——
+#: 阈值不藏默认值（CLAUDE.md）。与产品默认同口径，当前面积才能与历史序列
+#: 直接比较。
+LATEST_MIN_AREA_KM2 = 0.01
+
+#: 最新观测默认回溯天数。与 ``glof.core.latest.DEFAULT_LOOKBACK_DAYS`` 一致
+#: （重访 5 天 + L2A 1–3 天，20 天给连续多云留余量）。
+LATEST_LOOKBACK_DAYS = DEFAULT_LOOKBACK_DAYS
 
 
 def _risk_summary_text(assessment: RiskAssessment) -> str:
@@ -104,6 +122,9 @@ class AppState(QObject):
         三个子模块（CONSTANT：装配后对象恒定，内部状态经各自的 NOTIFY 刷新）。
     defaultInput : str
         命令行 ``--input`` 传入的初始影像路径（CONSTANT），QML 输入框据此取默认值。
+    latestLookbackDays : int
+        最新观测默认回溯天数（CONSTANT，= ``LATEST_LOOKBACK_DAYS``）。
+        QML 不自己写 20，避免与 core 的默认值悄悄漂移。
     busyExtract / busySeries : bool
         对应长任务是否在跑（NOTIFY），QML 用来禁用按钮并转圈。
     progressText / lastError : str
@@ -115,6 +136,19 @@ class AppState(QObject):
     selectedLakeRisk : str
         选中湖的风险摘要"等级 · 判据名 判据值（阈值）"，来自面积最大期的
         判定；无选中或尚未判定为 ""（NOTIFY）。
+    latestBusy : bool
+        "刷新最新观测"是否在跑（NOTIFY）。
+    latestAgeDays : int
+        观测影像距今几天，-1 表示还没有任何观测。**界面必须显示**。
+    latestDate : str
+        观测影像拍摄日期 ``YYYY-MM-DD``，无观测为 ""。
+    latestAreaKm2 : float
+        当前湖泊总面积 km²。**NaN = 没量到**（冰封/无水面信号），
+        绝不是 0——"量到零"与"没量到"必须分开（CLAUDE.md 硬规矩）。
+    latestNLakes : int
+        当前提取到的湖泊数，-1 表示还没有观测。
+    latestMessage : str
+        提示语：暂无观测的原因 / 季节警告 / 错误。空串表示无需提示。
 
     Slots
     -----
@@ -135,6 +169,11 @@ class AppState(QObject):
     cancelSeries()
         请求取消正在跑的时序检索（无任务时空操作）。能否立即中断取决于
         build_series 的回调间隙，诚实语义见 SeriesWorker.cancel()。
+    refreshLatest(x0, y0, x1, y1, lookbackDays)
+        起 LatestWorker 联网取最近一景；与 buildSeries 一样接受
+        ``[x0,y0,x1,y1]`` 列表或四个 real 两种形状（两个重载）。
+        ``fetch_latest`` 返回 None 是"暂无可用观测"，不是失败：照常发
+        latestFinished(None)，latestMessage 写明原因。
 
     冒烟/测试注入口
     ---------------
@@ -147,6 +186,8 @@ class AppState(QObject):
     extractFailed = Signal(str)
     seriesFinished = Signal(list)  # list[SeriesPoint]
     seriesFailed = Signal(str)
+    latestFinished = Signal(object)  # LatestObservation | None
+    latestFailed = Signal(str)
 
     # ---- NOTIFY 属性的变更信号 ----
     busyExtractChanged = Signal()
@@ -155,6 +196,7 @@ class AppState(QObject):
     lastErrorChanged = Signal()
     selectedLakeChanged = Signal()
     selectedLakeRiskChanged = Signal()
+    latestChanged = Signal()
 
     def __init__(
         self,
@@ -171,6 +213,7 @@ class AppState(QObject):
 
         self._busy_extract = False
         self._busy_series = False
+        self._busy_latest = False
         self._progress_text = ""
         self._last_error = ""
         # 选中湖（selectLake 记住本体；buildSeries 检索窗口与风险判定都挂它）
@@ -178,9 +221,19 @@ class AppState(QObject):
         # 选中湖的风险摘要（_apply_series_result 的判定回流，状态栏显示）
         self._selected_risk = ""
 
+        # 最新观测（LatestObservation 的扁平化字段，见 Q_PROPERTY 文档）
+        # -1 / NaN / "" 表示"还没有观测"；NaN 与 0 的区别是本功能的诚实性底线。
+        self._latest_obs: LatestObservation | None = None
+        self._latest_age_days = -1
+        self._latest_date = ""
+        self._latest_area_km2 = float("nan")
+        self._latest_n_lakes = -1
+        self._latest_message = ""
+
         # 持引用防 GC（见类 docstring）；busy 守卫保证同一时刻最多一个 worker
         self._extract_worker: ExtractWorker | None = None
         self._series_worker: SeriesWorker | None = None
+        self._latest_worker: LatestWorker | None = None
 
     # ------------------------------------------------------------------
     # Q_PROPERTY
@@ -198,11 +251,32 @@ class AppState(QObject):
     def _get_default_input(self) -> str:
         return self._default_input
 
+    def _get_latest_lookback_days(self) -> int:
+        return LATEST_LOOKBACK_DAYS
+
     def _get_busy_extract(self) -> bool:
         return self._busy_extract
 
     def _get_busy_series(self) -> bool:
         return self._busy_series
+
+    def _get_busy_latest(self) -> bool:
+        return self._busy_latest
+
+    def _get_latest_age_days(self) -> int:
+        return self._latest_age_days
+
+    def _get_latest_date(self) -> str:
+        return self._latest_date
+
+    def _get_latest_area_km2(self) -> float:
+        return self._latest_area_km2
+
+    def _get_latest_n_lakes(self) -> int:
+        return self._latest_n_lakes
+
+    def _get_latest_message(self) -> str:
+        return self._latest_message
 
     def _get_progress_text(self) -> str:
         return self._progress_text
@@ -227,6 +301,7 @@ class AppState(QObject):
     series = Property(QObject, _get_series, constant=True)
     lakes = Property(QObject, _get_lakes, constant=True)
     defaultInput = Property(str, _get_default_input, constant=True)
+    latestLookbackDays = Property(int, _get_latest_lookback_days, constant=True)
     busyExtract = Property(bool, _get_busy_extract, notify=busyExtractChanged)
     busySeries = Property(bool, _get_busy_series, notify=busySeriesChanged)
     progressText = Property(str, _get_progress_text, notify=progressTextChanged)
@@ -234,6 +309,12 @@ class AppState(QObject):
     selectedLakeId = Property(int, _get_selected_lake_id, notify=selectedLakeChanged)
     selectedLakeLabel = Property(str, _get_selected_lake_label, notify=selectedLakeChanged)
     selectedLakeRisk = Property(str, _get_selected_lake_risk, notify=selectedLakeRiskChanged)
+    latestBusy = Property(bool, _get_busy_latest, notify=latestChanged)
+    latestAgeDays = Property(int, _get_latest_age_days, notify=latestChanged)
+    latestDate = Property(str, _get_latest_date, notify=latestChanged)
+    latestAreaKm2 = Property(float, _get_latest_area_km2, notify=latestChanged)
+    latestNLakes = Property(int, _get_latest_n_lakes, notify=latestChanged)
+    latestMessage = Property(str, _get_latest_message, notify=latestChanged)
 
     # ------------------------------------------------------------------
     # 槽：长任务派发
@@ -344,6 +425,64 @@ class AppState(QObject):
         if self._series_worker is not None and self._series_worker.isRunning():
             self._series_worker.cancel()
             self._set_progress_text("已请求取消，等待检索中断 …")
+
+    @Slot("QVariantList", int)
+    @Slot(float, float, float, float, int)
+    def refreshLatest(self, *args) -> None:
+        """刷新最新观测（真的联网，秒级到十几秒）。两种调用形状同 buildSeries。
+
+        ``fetch_latest`` 不抛异常，返回 None 只表示"最近 lookback 天没有
+        一景可用"——照常发 latestFinished(None)，界面显示"暂无可用观测"，
+        不当成失败、更不当成"没有湖"。参数口径全部显式：max_cloud 与
+        min_area_km2 取 ``glof.core.latest`` 的公开默认值（20% / 0.01 km²），
+        不在这里另藏一份。
+        """
+        if self._busy_latest:
+            return  # 同一任务不并发；QML 侧按钮此时已被禁用
+        if len(args) == 2:
+            bbox, lookback = args
+        elif len(args) == 5:
+            bbox, lookback = list(args[:4]), args[4]
+        else:
+            self._set_last_error(
+                "refreshLatest 参数形状不对：需要 (bbox, 回溯天数) 或四个坐标加回溯天数。")
+            return
+        try:
+            bbox4 = [float(v) for v in bbox]
+            lookback_days = int(lookback)
+        except (TypeError, ValueError):
+            self._set_last_error("bbox / 回溯天数必须是数字。")
+            return
+        if len(bbox4) != 4:
+            self._set_last_error(f"bbox 需要 4 个值 (x0,y0,x1,y1)，收到 {len(bbox4)} 个。")
+            return
+        x0, y0, x1, y1 = bbox4
+        if not all(math.isfinite(v) for v in bbox4):
+            self._set_last_error("bbox 含非数字值。")
+            return
+        if not (x0 < x1 and y0 < y1):
+            self._set_last_error("bbox 需要 经度最小 < 经度最大、纬度最小 < 纬度最大。")
+            return
+        if lookback_days <= 0:
+            self._set_last_error("回溯天数必须 > 0。")
+            return
+
+        worker = LatestWorker(
+            bbox4,
+            lookback_days=lookback_days,
+            max_cloud=DEFAULT_MAX_CLOUD,
+            min_area_km2=LATEST_MIN_AREA_KM2,
+            parent=self,
+        )
+        worker.progressed.connect(self._on_latest_progress)
+        worker.finished_obs.connect(self._on_latest_finished)
+        worker.failed.connect(self._on_latest_failed)
+        self._latest_worker = worker
+        self._set_last_error("")
+        self._set_busy_latest(True)
+        self._set_progress_text(
+            f"检索最新观测（最近 {lookback_days} 天，云量 ≤ {DEFAULT_MAX_CLOUD:g}%，联网）…")
+        worker.start()
 
     # ------------------------------------------------------------------
     # worker 信号 → 主线程槽
@@ -459,6 +598,50 @@ class AppState(QObject):
         self._set_last_error(message)
         self.seriesFailed.emit(message)
 
+    def _on_latest_progress(self, text: str) -> None:
+        self._set_progress_text(text)
+
+    def _on_latest_finished(self, obs: LatestObservation | None) -> None:
+        """最新观测回流。``None`` 是"暂无可用观测"，不是失败。"""
+        self._latest_obs = obs
+        if obs is None:
+            self._latest_age_days = -1
+            self._latest_date = ""
+            self._latest_area_km2 = float("nan")
+            self._latest_n_lakes = -1
+            self._latest_message = "暂无可用观测：最近一段时间没有满足云量与覆盖要求的影像"
+            self._set_progress_text("最新观测：暂无可用观测")
+        else:
+            self._latest_age_days = int(obs.age_days)
+            self._latest_date = str(obs.observed_on)
+            # total_area_km2 为 None 时保持 NaN —— 绝不写成 0
+            self._latest_area_km2 = (
+                float(obs.total_area_km2) if obs.total_area_km2 is not None
+                else float("nan")
+            )
+            self._latest_n_lakes = int(obs.n_lakes)
+            # 季节警告优先；没有警告但没量到面积时，把"为什么"说清楚
+            if obs.season_warning:
+                self._latest_message = obs.season_warning
+            elif obs.total_area_km2 is None:
+                self._latest_message = "窗口内无水面信号（冰封或已排空），面积没量到"
+            else:
+                self._latest_message = ""
+            self._set_progress_text(
+                f"最新观测：{obs.observed_on}（距今 {obs.age_days} 天）")
+        # 字段与 busy 位在同一次 NOTIFY 里交付，QML 不会先看到"不忙了"再闪旧值
+        self._busy_latest = False
+        self.latestChanged.emit()
+        self.latestFinished.emit(obs)
+
+    def _on_latest_failed(self, message: str) -> None:
+        self._latest_message = f"检索失败：{message}"
+        self._busy_latest = False
+        self.latestChanged.emit()
+        self._set_progress_text("最新观测检索失败")
+        self._set_last_error(message)
+        self.latestFailed.emit(message)
+
     # ------------------------------------------------------------------
     # 内部工具
     # ------------------------------------------------------------------
@@ -487,6 +670,14 @@ class AppState(QObject):
         if self._busy_series != value:
             self._busy_series = value
             self.busySeriesChanged.emit()
+
+    def _set_busy_latest(self, value: bool) -> None:
+        # latestBusy 与其余 latest* 属性共用一个 NOTIFY（见 latestChanged）：
+        # 结果字段与 busy 位总在同一次刷新里一起变，分开发信号只会让 QML
+        # 先看到"不忙了"再看到新数据，中间闪一帧旧值。
+        if self._busy_latest != value:
+            self._busy_latest = value
+            self.latestChanged.emit()
 
     def _set_progress_text(self, text: str) -> None:
         if self._progress_text != text:
