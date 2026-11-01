@@ -1,0 +1,42 @@
+{
+  "site_id": "site020",
+  "name": "Unknown",
+  "lat": 35.687,
+  "lon": 75.907,
+  "n_events": 3,
+  "scene_id": "S2B_MSIL2A_20250913T053639_R005_T43SEV_20250913T074825",
+  "date": "2025-09-13",
+  "cloud": 0.01,
+  "file": "data/eval/windows/site020.tif",
+  "shape": [
+    670,
+    549
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.77,
+  "tile": "T43SEV",
+  "years": [
+    1661,
+    1890,
+    1895
+  ],
+  "lake_type": "Supraglacial",
+  "country": "Pakistan",
+  "elev_m": 3059.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    75.877,
+    35.657,
+    75.937,
+    35.717
+  ],
+  "bbox_actual": [
+    75.876296,
+    35.656639,
+    75.937647,
+    35.717498
+  ],
+  "bounds_offset_px": 1.0,
+  "coverage": 0.9976,
+  "n_candidates": 28
+}

@@ -35,6 +35,9 @@ __all__ = [
     "cluster_lakes",
     "save_sites_geojson",
     "CITATION",
+    "LakeProfile",
+    "lake_profile",
+    "DEFAULT_DB_PATH",
 ]
 
 CITATION = (
@@ -278,3 +281,84 @@ def save_sites_geojson(sites: Sequence[LakeSite], path: str | Path) -> Path:
         encoding="utf-8",
     )
     return out
+
+
+# ---------------------------------------------------------------------------
+# 单湖画像：给界面/调用方查"这个点位附近有没有已知溃决湖"（风险接线追加）
+# ---------------------------------------------------------------------------
+
+#: 默认事件库：项目根 data/raw 下的 ICIMOD zip（与 scripts/kyagar_series.py
+#: 的 --db 缺省值同一份文件）。lake_profile() 的 db 缺省值。
+DEFAULT_DB_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "data" / "raw" / "GLOF database of High Mountain Asia.zip"
+)
+
+
+@dataclass
+class LakeProfile:
+    """半径查询命中的单个已知溃决湖画像。
+
+    Attributes
+    ----------
+    name, lake_type
+        库内原文（如 ``"Kyagar"``、``"Ice dammed"``）。注意库的坝型是
+        自然语言词表，不是 ``risk.lake_type_kind`` 的别名表——风险判定前
+        的归一化由调用方负责（见 glof/ui/app_state.py）。
+    n_events
+        聚类后该点的溃决事件条数。
+    first_year, last_year
+        事件年范围；没有带年份的事件时为 None。
+    event_years
+        升序去重的事件年列表（如克亚吉尔的 1880–2019 共 33 个年份）。
+    lat, lon
+        聚类质心（该点全部命中事件的均值坐标）。
+    """
+
+    name: str
+    lake_type: str
+    n_events: int
+    first_year: int | None
+    last_year: int | None
+    event_years: list[int]
+    lat: float
+    lon: float
+
+
+def lake_profile(
+    lat: float,
+    lon: float,
+    db: str | Path = DEFAULT_DB_PATH,
+    radius_deg: float = 0.05,
+) -> LakeProfile | None:
+    """查一个点位附近的已知溃决湖画像（坝型、事件数、事件年）。
+
+    复用 ``load_glof_database`` + 半径过滤 + ``cluster_lakes``，取事件最多
+    的聚类点。半径过滤与 ``scripts/kyagar_series.known_events()`` 同口径：
+    ``|Δlat|`` 与 ``|Δlon|`` 都 ≤ radius_deg（0.05° 约 5 km）。
+
+    诚实性约定：邻近没有已知事件、库文件缺失、读取失败一律返回 **None**，
+    不抛异常、不猜——调用方（界面）据此如实显示"未知/无记录"。
+    """
+    try:
+        events, _ = load_glof_database(db)
+    except Exception:  # noqa: BLE001 - 库缺失/损坏是部署环境问题，不炸调用方
+        return None
+    near = [
+        e for e in events
+        if abs(e.lat - lat) <= radius_deg and abs(e.lon - lon) <= radius_deg
+    ]
+    if not near:
+        return None
+    sites = cluster_lakes(near, radius_m=1000.0)
+    best = max(sites, key=lambda s: s.n_events)
+    return LakeProfile(
+        name=best.name,
+        lake_type=best.lake_type,
+        n_events=best.n_events,
+        first_year=best.first_year,
+        last_year=best.last_year,
+        event_years=list(best.years),
+        lat=best.lat,
+        lon=best.lon,
+    )

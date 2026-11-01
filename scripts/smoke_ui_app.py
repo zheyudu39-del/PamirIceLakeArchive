@@ -10,6 +10,7 @@
 * 用当前解释器子进程运行 ``python -m glof.ui --smoke``（cwd=项目根，
   环境变量 offscreen/software 由入口自己按 --smoke 设置）；
 * 断言退出码 0、截图 output/ui_smoke/app.png 存在且非空；
+  另断言风险接线步骤（子进程"步骤 5"）真的跑了且 app_risk.png 落盘非空；
 * 转发子进程全部输出（断言明细都在那里），全绿打印 ``APP SMOKE PASS``。
 
 素材与预期数字的诚实性说明见 ``glof/ui/__main__.py`` 模块 docstring：
@@ -32,6 +33,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 PNG = ROOT / "output" / "ui_smoke" / "app.png"
+PNG_RISK = ROOT / "output" / "ui_smoke" / "app_risk.png"
 
 
 def main() -> int:
@@ -67,6 +69,23 @@ def main() -> int:
     if size <= 0:
         print("APP SMOKE FAIL: 截图缺失或为空", file=sys.stderr)
         return 1
+
+    # ---- 风险接线步骤的宿主侧断言（只增不改）----
+    # 子进程的明细断言在 __main__.py --smoke 步骤 5；这里只验三件事：
+    # 该步骤真的跑了、风险截图落盘非空、子进程自报全绿。
+    if "步骤 5 / 风险接线" not in proc.stdout:
+        print("APP SMOKE FAIL: 子进程输出缺'步骤 5 / 风险接线'（旧版入口？）",
+              file=sys.stderr)
+        return 1
+    size_risk = PNG_RISK.stat().st_size if PNG_RISK.exists() else 0
+    print(f"风险接线截图 {PNG_RISK.relative_to(ROOT)} {size_risk} bytes", flush=True)
+    if size_risk <= 0:
+        print("APP SMOKE FAIL: app_risk.png 缺失或为空", file=sys.stderr)
+        return 1
+    if "APP SMOKE PASS" not in proc.stdout:
+        print("APP SMOKE FAIL: 子进程未自报 PASS", file=sys.stderr)
+        return 1
+
     print("APP SMOKE PASS", flush=True)
     return 0
 

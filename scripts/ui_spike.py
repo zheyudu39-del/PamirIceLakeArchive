@@ -376,7 +376,9 @@ def main() -> int:
         (
             "启动链路（读栈+拉伸+上图）< 5 s",
             (t_read + t_stretch + t_image) < 5.0,
-            f"{(t_read + t_stretch + t_image) * 1000:.0f} ms",
+            f"{(t_read + t_stretch + t_image) * 1000:.0f} ms"
+            f"（读栈 {t_read * 1000:.0f} + 拉伸 {t_stretch * 1000:.0f}"
+            f" + QImage {t_image * 1000:.0f}）",
         ),
         (
             "释放影像栈后稳态 RSS < 300 MB（docs §2.2 运行时预估的宽松上界）",

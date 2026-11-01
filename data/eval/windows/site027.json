@@ -1,0 +1,41 @@
+{
+  "site_id": "site027",
+  "name": "Unknown",
+  "lat": 35.899,
+  "lon": 76.764,
+  "n_events": 2,
+  "scene_id": "S2B_MSIL2A_20250705T053649_R005_T43SFV_20250705T074307",
+  "date": "2025-07-05",
+  "cloud": 0.08,
+  "file": "data/eval/windows/site027.tif",
+  "shape": [
+    675,
+    554
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.88,
+  "tile": "T43SFV",
+  "years": [
+    1929,
+    1953
+  ],
+  "lake_type": "Ice dammed",
+  "country": "China",
+  "elev_m": 4240.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    76.734,
+    35.869,
+    76.794,
+    35.929
+  ],
+  "bbox_actual": [
+    76.732595,
+    35.868146,
+    76.795307,
+    35.929878
+  ],
+  "bounds_offset_px": 0.876,
+  "coverage": 0.9987,
+  "n_candidates": 24
+}

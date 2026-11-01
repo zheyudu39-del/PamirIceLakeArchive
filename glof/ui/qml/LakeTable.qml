@@ -26,7 +26,20 @@ Item {
     readonly property int levelColumn: 6
     // 数值列（面积/周长/NDWI/经度/纬度）右对齐；ID 与等级列不右对齐
     readonly property var numericColumns: [1, 2, 3, 4, 5]
+    // 各列的最小宽度（按内容估的基准值）。TableView 会把多余宽度按比例
+    // 分摊给这些列，所以 860 宽的表能看到完整的 7 列；窗口变窄时也不会
+    // 小于这里给的值——小于就交给横向滚动，而不是把末列裁掉。
     readonly property var columnWidths: [70, 105, 95, 100, 95, 95, 120]
+    readonly property int columnsTotal: 680
+
+    // 实际列宽：视口比基准宽就按比例撑开（否则右侧留白、等级色块贴边被裁）。
+    function _columnWidth(column) {
+        var base = root.columnWidths[column]
+        var avail = tableView.width
+        if (!(avail > 0) || avail <= root.columnsTotal)
+            return base
+        return Math.floor(base * avail / root.columnsTotal)
+    }
 
     implicitWidth: 720
     implicitHeight: 480
@@ -139,9 +152,12 @@ Item {
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             model: app.lakes
-            // 列宽在表格里定死一份，HorizontalHeaderView 经 syncView 自动共享
-            columnWidthProvider: function(column) { return root.columnWidths[column] }
+            // 列宽随视口宽度按比例分摊，HorizontalHeaderView 经 syncView 自动共享
+            columnWidthProvider: function(column) { return root._columnWidth(column) }
             rowHeightProvider: function(row) { return root.rowHeight }
+            // columnWidthProvider 是函数、不参与属性绑定，宽度变化后必须手动
+            // 重排，否则撑开/收窄都只在下一次滚动时才生效。
+            onWidthChanged: forceLayout()
 
             delegate: Rectangle {
                 // required 属性由 TableView 注入：model 是角色集，row/column 是格坐标

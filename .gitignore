@@ -1,12 +1,37 @@
+# ---- Python / 环境 ----
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# ---- 编辑器 / 本机工具 ----
 .zcode/
 .workbuddy-ai/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- 数据（体积大，用脚本重建，不入库）----
+# 只保留 .gitkeep 占位，其余一律忽略。各目录的取数方式见 README。
 data/raw/*
 data/spike/*
 data/interim/*
 data/processed/*
 !data/raw/.gitkeep
+
+# 评估影像窗口：单窗约 5 MB、55 个共 120+ MB，不入库。
+# 清单（windows.json / missing.json）**要**入库——它记录了抽样口径，
+# 是评价结果可复现的前提。重建影像跑 scripts/fetch_eval_windows.py。
+data/eval/windows/*.tif
+data/eval/windows/*.tif.part
+
+# ---- 输出（跑出来的，不入库）----
 output/*
 !output/.gitkeep
+
+# ---- 临时 ----
+*.log
+logs_fetch.txt

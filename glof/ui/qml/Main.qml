@@ -2,10 +2,13 @@
 //
 // 装配契约（与 glof/ui/app_state.py 对齐）：
 //   * 上下文属性 app（AppState）：app.map / app.series / app.lakes 三个子对象，
-//     busyExtract / busySeries / progressText / lastError 全 NOTIFY 属性；
+//     busyExtract / busySeries / progressText / lastError / selectedLakeId /
+//     selectedLakeLabel / selectedLakeRisk 全 NOTIFY 属性；
 //     槽 extract(inputPath, threshold, minArea)、
-//        buildSeries([x0,y0,x1,y1], year0, year1)（也支持四个 real 的形状）、
-//        cancelSeries()（请求取消时序检索）、selectLake(lakeId)。
+//        buildSeries([x0,y0,x1,y1], year0, year1)（也支持四个 real 的形状；
+//        有选中湖时检索窗口用湖心 ±0.03°，见 app_state.PAD_DEG）、
+//        cancelSeries()（请求取消时序检索）、selectLake(lakeId)（记住选中湖，
+//        时序判定回流经 selectedLakeRisk 显示在状态栏）。
 //   * 联动回环的防法（与 LakeTable.qml 文件头同一条注释）：
 //       表格点行 → table.lakeClicked → app.selectLake → 地图高亮；
 //       地图点湖 → app.map.lakeClicked → 这里调 table.selectRow（程序化选中
@@ -33,7 +36,7 @@ ApplicationWindow {
     minimumWidth: 1100
     minimumHeight: 700
     visible: true
-    title: "克亚吉尔冰湖监测"
+    title: "帕米尔冰湖档案"
     color: "#f1f3f4"
 
     // ---- 状态栏文本（Connections 里回填，见文件底部） ----
@@ -296,7 +299,7 @@ ApplicationWindow {
         }
     }
 
-    // ---- 状态栏：悬停经纬度 + 曲线点选面积 + 进度 ----
+    // ---- 状态栏：悬停经纬度 + 曲线点选面积 + 选中湖风险摘要 + 进度 ----
     // 用普通 Rectangle 而不是 Frame 定制 background：原生样式（Windows）不支持
     // 定制 Controls 的背景件，会打 "does not support customization" 警告。
     footer: Rectangle {
@@ -320,6 +323,21 @@ ApplicationWindow {
                 text: window.pointText
                 font.pixelSize: 12
                 color: "#1a56b0"
+            }
+            // 选中湖风险摘要（等级 + 判据值，_apply_series_result 判定回流）。
+            // 无选中/未判定为 "" 整个隐藏；配色保持中性——等级语义色由表格
+            // 色块与地图多边形承担，状态栏不再涂一遍，避免 LOW 也被衬红。
+            Label {
+                objectName: "statusRisk"
+                visible: app.selectedLakeRisk !== ""
+                text: app.selectedLakeLabel !== ""
+                      ? app.selectedLakeLabel + "　" + app.selectedLakeRisk
+                      : app.selectedLakeRisk
+                font.pixelSize: 12
+                font.bold: true
+                color: "#202124"
+                elide: Text.ElideMiddle
+                Layout.maximumWidth: 480
             }
             Item { Layout.fillWidth: true }
             Label {

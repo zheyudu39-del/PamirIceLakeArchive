@@ -1,0 +1,42 @@
+{
+  "site_id": "site016",
+  "name": "Saklei Shuyinj",
+  "lat": 36.841689,
+  "lon": 73.833068,
+  "n_events": 3,
+  "scene_id": "S2A_MSIL2A_20230813T054641_R048_T43SCA_20241020T061215",
+  "date": "2023-08-13",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site016.tif",
+  "shape": [
+    672,
+    543
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.3,
+  "tile": "T43SCA",
+  "years": [
+    1911,
+    1912,
+    1913
+  ],
+  "lake_type": "Ice dammed",
+  "country": "Pakistan",
+  "elev_m": 4158.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    73.803068,
+    36.811689,
+    73.863068,
+    36.871689
+  ],
+  "bbox_actual": [
+    73.802049,
+    36.811138,
+    73.863858,
+    36.872302
+  ],
+  "bounds_offset_px": 0.866,
+  "coverage": 0.9978,
+  "n_candidates": 38
+}

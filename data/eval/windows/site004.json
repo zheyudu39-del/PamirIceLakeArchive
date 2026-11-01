@@ -1,0 +1,49 @@
+{
+  "site_id": "site004",
+  "name": "Karambar",
+  "lat": 36.6214,
+  "lon": 74.07906,
+  "n_events": 11,
+  "scene_id": "S2A_MSIL2A_20230912T054641_R048_T43SDA_20230912T121347",
+  "date": "2023-09-12",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site004.tif",
+  "shape": [
+    671,
+    543
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.3,
+  "tile": "T43SDA",
+  "years": [
+    1844,
+    1860,
+    1865,
+    1893,
+    1895,
+    1904,
+    1905,
+    1916,
+    1929,
+    1955,
+    1994
+  ],
+  "lake_type": "Ice dammed",
+  "country": "Pakistan",
+  "elev_m": 2935.0,
+  "pad_deg": 0.03,
+  "bbox_requested": [
+    74.04906,
+    36.5914,
+    74.10906,
+    36.6514
+  ],
+  "bbox_actual": [
+    74.04824,
+    36.590972,
+    74.109679,
+    36.651924
+  ],
+  "bounds_offset_px": 0.737,
+  "n_candidates": 31
+}

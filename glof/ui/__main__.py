@@ -23,7 +23,12 @@ QT_QPA_PLATFORM / QT_QUICK_BACKEND 必须在 QApplication 与 QML 场景创建�
    scripts/smoke_ui_table.py）做一次"满载"提取，验证大规模多边形 + 表格。
 4. "检索时序"按钮以空年份区间（结束年 < 起始年）点击：SeriesWorker 不联网、
    立即返回空序列——离线验证 buildSeries 的 QML→槽→worker→controller 链路。
-5. grabWindow 截图 output/ui_smoke/app.png，全部断言通过退出码 0。
+5. 风险接线（离线）：selectLake 选中当前最大湖 → _apply_series_result 注入
+   13 期合成点 → lake_profile 真查本地 ICIMOD 事件库拿坝型/溃决年 →
+   assess_series 判面积最大期（2018-08-06 满蓄 1.8254 km²）为 HIGH →
+   表格 dataChanged + 地图多边形重着色 + selectedLakeRisk 状态栏摘要回流，
+   截图 output/ui_smoke/app_risk.png 存证。
+6. grabWindow 截图 output/ui_smoke/app.png，全部断言通过退出码 0。
 """
 
 from __future__ import annotations
@@ -46,16 +51,42 @@ from PySide6.QtCore import (QCoreApplication, QEvent, QEventLoop, QObject,  # no
                             QPoint, QTimer, Qt, QUrl)
 from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 from PySide6.QtQuick import QQuickWindow  # noqa: E402
-from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtTest import QSignalSpy, QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from glof.core.inventory import lake_profile  # noqa: E402
+from glof.core.timeseries import SeriesPoint  # noqa: E402
 from glof.ui.app_state import DEFAULT_INPUT, AppState  # noqa: E402
 from glof.ui.image_provider import RasterImageProvider  # noqa: E402
+from glof.ui.style import risk_color  # noqa: E402
 
 QML_DIR = Path(__file__).resolve().parent / "qml"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = PROJECT_ROOT / "output" / "ui_smoke"
 SPIKE_INPUT = "data/spike/S2C_MSIL2A_20250928T053701_R005_T43SFV_20250928T103015.tif"
+
+# 冒烟注入的 13 期合成点（2018 消融期，形态对齐 kyagar_dense.csv 的实测形状：
+# 早期低 → 中期涨到平台 1.8254 附近 → 08-06 满蓄为全序列最大 → 溃决后回落）。
+# 08-06 之前有 7 期（≥3），留出法年内回退成立，平台=1.79 → 比值 1.0198 > 0.95。
+_SYNTH_2018: list[tuple[str, float]] = [
+    ("2018-06-02", 0.35), ("2018-06-12", 0.52), ("2018-06-22", 0.74),
+    ("2018-07-02", 0.98), ("2018-07-12", 1.21), ("2018-07-22", 1.55),
+    ("2018-07-27", 1.79), ("2018-08-06", 1.8254), ("2018-08-16", 1.42),
+    ("2018-08-26", 0.61), ("2018-09-05", 0.43), ("2018-09-12", 0.38),
+    ("2018-09-20", 0.31),
+]
+
+
+def _synthetic_series_2018() -> list[SeriesPoint]:
+    """合成 13 期 SeriesPoint（全程离线；覆盖质量给满，不触发窄条过滤）。"""
+    return [
+        SeriesPoint(
+            date=date, year=2018, area_km2=area, valid_px=378324, valid_frac=1.0,
+            tile="T43SGV", cloud=5.0, scene=f"smoke-synth/{date}",
+            ndwi_max=0.45, water_frac=0.31,
+        )
+        for date, area in _SYNTH_2018
+    ]
 
 # engine.warnings 收集到的 QML 警告（冒烟末尾断言为空）
 qml_warnings: list[str] = []
@@ -295,8 +326,103 @@ def run_smoke(app: QApplication, engine: QQmlApplicationEngine, state: AppState,
     y1f.setProperty("text", "2025")  # 恢复默认年份，截图状态与面板默认一致
     app.processEvents()
 
-    # ---- 5) 截图存证 ----
-    print("== 步骤 5 / 截图 ==", flush=True)
+    # ---- 5) 风险接线：选中最大湖 → 注入 13 期合成点 → 判定回流（离线） ----
+    # 库是本地 zip（data/raw），lake_profile 真查询；时序点是合成值，不走网络。
+    print("== 步骤 5 / 风险接线（选中湖 → 事件库 → 逐期判定 → 表格/地图/状态栏）==",
+          flush=True)
+    current = map_ctrl.lake_records
+    if not check("当前有可选中记录", len(current) >= 1, f"{len(current)} 条"):
+        return smoke_fail("无记录，风险接线冒烟无法继续")
+    # 最大湖：探针实测 spike 满载最大湖即克亚吉尔本湖（5.5688 km²，质心距库内
+    # Kyagar 点 3.7 km，落在 0.05° 邻域内）→ lake_profile 命中冰坝系 34 条事件。
+    target = max(current, key=lambda r: r.area_m2)
+    state.selectLake(int(target.lake_id))
+    app.processEvents()
+    check("selectLake 记住选中湖",
+          int(state.property("selectedLakeId")) == int(target.lake_id),
+          f"selectedLakeId={state.property('selectedLakeId')} 期望 {target.lake_id}")
+    check("selectedLakeLabel 摘要非空（id/面积/质心）",
+          "#" in str(state.property("selectedLakeLabel"))
+          and "km²" in str(state.property("selectedLakeLabel")),
+          str(state.property("selectedLakeLabel")))
+
+    # 选中湖质心 → 真查本地事件库（与 _apply_series_result 同一调用）
+    prof = lake_profile(target.centroid_lat, target.centroid_lon)
+    check("lake_profile 真查询本地库命中（profile 非 None）", prof is not None,
+          f"{prof!r}" if prof else "None")
+    if prof is not None:
+        check("选中湖坝型属冰坝系（库值含 ice）", "ice" in prof.lake_type.lower(),
+              f"lake_type={prof.lake_type!r}, n_events={prof.n_events}")
+        check("2018 ∈ 库事件年", 2018 in prof.event_years,
+              f"{prof.first_year}–{prof.last_year} 共 {len(prof.event_years)} 年")
+
+    spy_data = QSignalSpy(state.lakes.dataChanged)
+    check("QSignalSpy 挂上 dataChanged", spy_data.isValid())
+    state._apply_series_result(_synthetic_series_2018())  # 冒烟注入口（与 worker 回调同一路径）
+    deadline = time.time() + 5
+    while spy_data.count() == 0 and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    check("dataChanged 有发出（QSignalSpy 记录，轮询等待）",
+          spy_data.count() >= 1, f"count={spy_data.count()}")
+
+    check("序列 13 期上曲线",
+          len(state.property("series").property("points")) == 13,
+          f"{len(state.property('series').property('points'))} 期")
+    check("事件年来自库查询（2018 ∈ series.eventYears）",
+          2018 in list(state.property("series").property("eventYears")),
+          f"eventYears={list(state.property('series').property('eventYears'))}")
+    check("平台 = 满蓄期 1.8254",
+          abs(float(state.property("series").property("plateau")) - 1.8254) < 1e-3,
+          f"plateau={state.property('series').property('plateau')}")
+
+    row = state.lakes.row_of(int(target.lake_id))
+    check("选中湖 risk_level 更新为 HIGH（面积最大期 2018-08-06 满蓄判定）",
+          target.risk_level == "HIGH", f"risk_level={target.risk_level!r}")
+    check("risk_reasons 非空且含 [命中]",
+          len(target.risk_reasons) > 0
+          and any("[命中]" in r for r in target.risk_reasons),
+          f"{len(target.risk_reasons)} 条，首条 {target.risk_reasons[0][:40]}…"
+          if target.risk_reasons else "空")
+    idx_lvl = state.lakes.index(row, 6)
+    check("表格风险列单元格显示 HIGH（data() 路径）",
+          state.lakes.data(idx_lvl) == "HIGH"
+          and state.lakes.data(idx_lvl, state.lakes.ROLE_COLOR) == risk_color("HIGH"),
+          f"display={state.lakes.data(idx_lvl)!r}")
+    poly = next((p for p in map_ctrl.property("polygons")
+                 if p["lakeId"] == int(target.lake_id)), None)
+    check("地图多边形重着色为 HIGH 红（update_lake_risk 路径）",
+          poly is not None and poly["color"] == risk_color("HIGH")
+          and poly["level"] == "HIGH",
+          f"color={poly['color'] if poly else None}")
+    check("selectedLakeRisk 摘要非空且含 HIGH",
+          "HIGH" in str(state.property("selectedLakeRisk")),
+          str(state.property("selectedLakeRisk")))
+
+    # 风险截图拍"面积时序"页：13 期曲线 + 平台线 + 事件年参考线，
+    # 与步骤 6 的"湖泊列表"页互补。原先这里也拍表格页，两张图字节完全相同
+    # （同状态同画面），作为证据等于只有一张。
+    check("切到 面积时序 页签（风险截图状态）", _click_item(win, "tabSeries"))
+    for _ in range(8):
+        app.processEvents()
+    risk_png = OUT_DIR / "app_risk.png"
+    img_risk = _grab(engine)
+    saved_risk = (not img_risk.isNull()) and img_risk.save(str(risk_png))
+    size_risk = risk_png.stat().st_size if risk_png.exists() else 0
+    check("app_risk.png 已保存且非空", saved_risk and size_risk > 30_000,
+          f"{size_risk} bytes")
+    chart = find("seriesChart")
+    check("风险截图页显示 13 期曲线", chart is not None
+          and int(chart.property("shownPoints")) == 13,
+          f"shownPoints={chart.property('shownPoints') if chart is not None else None}")
+    status_risk = find("statusRisk")
+    check("状态栏显示选中湖风险摘要",
+          status_risk is not None and bool(status_risk.property("visible"))
+          and "HIGH" in str(status_risk.property("text")),
+          str(status_risk.property("text")) if status_risk is not None else "找不到 statusRisk")
+
+    # ---- 6) 截图存证 ----
+    print("== 步骤 6 / 截图 ==", flush=True)
     # 切回"湖泊列表"页：截图里能看到地图多边形 + 满载表格 + 判据详情
     check("切到 湖泊列表 页签（截图状态）", _click_item(win, "tabTable"))
     for _ in range(8):
@@ -322,7 +448,7 @@ def run_smoke(app: QApplication, engine: QQmlApplicationEngine, state: AppState,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m glof.ui", description="克亚吉尔冰湖监测主窗口")
+        prog="python -m glof.ui", description="帕米尔冰湖档案主窗口")
     parser.add_argument("--input", default=DEFAULT_INPUT,
                         help="初始影像路径（填进输入框，默认契约素材）")
     parser.add_argument("--smoke", action="store_true",

@@ -1,0 +1,42 @@
+{
+  "site_id": "site021",
+  "name": "Unknown",
+  "lat": 35.497,
+  "lon": 76.271,
+  "n_events": 3,
+  "scene_id": "S2B_MSIL2A_20250705T053649_R005_T43SFV_20250705T074307",
+  "date": "2025-07-05",
+  "cloud": 0.08,
+  "file": "data/eval/windows/site021.tif",
+  "shape": [
+    672,
+    553
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.89,
+  "tile": "T43SFV",
+  "years": [
+    1990,
+    1993,
+    2000
+  ],
+  "lake_type": "Moraine dammed",
+  "country": "Pakistan",
+  "elev_m": 3720.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    76.241,
+    35.467,
+    76.301,
+    35.527
+  ],
+  "bbox_actual": [
+    76.24002,
+    35.466448,
+    76.301932,
+    35.527667
+  ],
+  "bounds_offset_px": 0.88,
+  "coverage": 0.9981,
+  "n_candidates": 24
+}

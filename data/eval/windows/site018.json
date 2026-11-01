@@ -1,0 +1,42 @@
+{
+  "site_id": "site018",
+  "name": "Unknown",
+  "lat": 36.338551,
+  "lon": 74.931346,
+  "n_events": 3,
+  "scene_id": "S2A_MSIL2A_20230912T054641_R048_T43SDA_20230912T121347",
+  "date": "2023-09-12",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site018.tif",
+  "shape": [
+    666,
+    539
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.44,
+  "tile": "T43SDA",
+  "years": [
+    1974,
+    1975,
+    1977
+  ],
+  "lake_type": "Landslide dammed",
+  "country": "Pakistan",
+  "elev_m": 4244.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    74.901346,
+    36.308551,
+    74.961346,
+    36.368551
+  ],
+  "bbox_actual": [
+    74.901233,
+    36.308581,
+    74.961348,
+    36.368658
+  ],
+  "bounds_offset_px": 0.808,
+  "coverage": 0.9985,
+  "n_candidates": 70
+}

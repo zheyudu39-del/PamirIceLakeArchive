@@ -1,0 +1,41 @@
+{
+  "site_id": "site026",
+  "name": "Unknown",
+  "lat": 35.997077,
+  "lon": 74.665676,
+  "n_events": 2,
+  "scene_id": "S2A_MSIL2A_20230714T054641_R048_T43SDV_20230714T113246",
+  "date": "2023-07-14",
+  "cloud": 0.15,
+  "file": "data/eval/windows/site026.tif",
+  "shape": [
+    667,
+    543
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.6,
+  "tile": "T43SDV",
+  "years": [
+    2014,
+    2015
+  ],
+  "lake_type": "Supraglacial",
+  "country": "Pakistan",
+  "elev_m": 3887.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    74.635676,
+    35.967077,
+    74.695676,
+    36.027077
+  ],
+  "bbox_actual": [
+    74.635393,
+    35.967003,
+    74.695891,
+    36.027307
+  ],
+  "bounds_offset_px": 1.038,
+  "coverage": 0.9982,
+  "n_candidates": 27
+}

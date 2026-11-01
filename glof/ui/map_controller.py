@@ -185,6 +185,25 @@ class MapController(QObject):
             p["highlighted"] = p["lakeId"] == self._highlighted_id
         self.polygonsChanged.emit()
 
+    def update_lake_risk(self, lake_id: int, level: str) -> bool:
+        """更新某湖的风险等级与着色（时序判定回流的地图侧入口），改了返回 True。
+
+        与 LakeModel.update_risk 配对：表格一行 dataChanged、地图一次
+        polygonsChanged，各走各的模型，谁也不用整表重建。色值仍唯一来自
+        style.risk_color；id 不在当前多边形里（换景后旧选中）返回 False。
+        """
+        color = risk_color(level)
+        changed = False
+        for p in self._polygons:
+            if p["lakeId"] == int(lake_id):
+                if p["level"] != level or p["color"] != color:
+                    p["level"] = str(level)
+                    p["color"] = color
+                    changed = True
+        if changed:
+            self.polygonsChanged.emit()
+        return changed
+
     def _set_polygons_unlocked(
         self,
         polygons: list[dict],

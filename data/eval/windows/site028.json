@@ -1,0 +1,41 @@
+{
+  "site_id": "site028",
+  "name": "Unknown",
+  "lat": 35.102,
+  "lon": 77.774,
+  "n_events": 2,
+  "scene_id": "S2B_MSIL2A_20240925T052649_R105_T43SGU_20240925T080053",
+  "date": "2024-09-25",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site028.tif",
+  "shape": [
+    681,
+    566
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.81,
+  "tile": "T43SGU",
+  "years": [
+    1871,
+    1898
+  ],
+  "lake_type": "Ice dammed",
+  "country": "India",
+  "elev_m": 4581.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    77.744,
+    35.072,
+    77.804,
+    35.132
+  ],
+  "bbox_actual": [
+    77.741942,
+    35.070611,
+    77.806052,
+    35.133366
+  ],
+  "bounds_offset_px": 0.431,
+  "coverage": 0.9998,
+  "n_candidates": 160
+}

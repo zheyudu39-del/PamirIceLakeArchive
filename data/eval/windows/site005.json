@@ -1,0 +1,47 @@
+{
+  "site_id": "site005",
+  "name": "Hassanabad",
+  "lat": 36.390545,
+  "lon": 74.50831,
+  "n_events": 9,
+  "scene_id": "S2A_MSIL2A_20230912T054641_R048_T43SDA_20230912T121347",
+  "date": "2023-09-12",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site005.tif",
+  "shape": [
+    668,
+    541
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.41,
+  "tile": "T43SDA",
+  "years": [
+    1894,
+    1899,
+    1900,
+    1902,
+    1903,
+    1904,
+    1913,
+    1914,
+    2002
+  ],
+  "lake_type": "Ice dammed",
+  "country": "Pakistan",
+  "elev_m": 3370.0,
+  "pad_deg": 0.03,
+  "bbox_requested": [
+    74.47831,
+    36.360545,
+    74.53831,
+    36.420545
+  ],
+  "bbox_actual": [
+    74.477841,
+    36.360403,
+    74.538543,
+    36.420872
+  ],
+  "bounds_offset_px": 1.169,
+  "n_candidates": 31
+}

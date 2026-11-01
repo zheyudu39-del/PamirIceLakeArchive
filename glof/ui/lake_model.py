@@ -108,6 +108,33 @@ class LakeModel(QAbstractTableModel):
         rec = self.record_at(row)
         return list(rec.risk_reasons) if rec is not None else []
 
+    def update_risk(self, lake_id: int, level: str, reasons: list[str]) -> bool:
+        """单行更新风险等级与判据（时序判定回流的入口），找到返回 True。
+
+        为什么不 set_records 整表 reset：reset 会把 TableView 滚动位置、
+        选中行与详情面板一起冲掉，而这里只有一行的等级/颜色变了。
+        就地改 LakeRecord（模型持有的是引用，data() 下次取值即新值）+
+        发一次 dataChanged，表格只重绘这一行。返回 False 表示该 id 不在
+        表里（如换景后旧选中），调用方据此跳过，不猜。
+        """
+        row = -1
+        for i, rec in enumerate(self._records):
+            if rec.lake_id == lake_id:
+                row = i
+                break
+        if row < 0:
+            return False
+        rec = self._records[row]
+        rec.risk_level = str(level)
+        rec.risk_reasons = [str(r) for r in reasons]
+        self.dataChanged.emit(
+            self.index(row, 0),
+            self.index(row, _N_COLUMNS - 1),
+            [int(Qt.ItemDataRole.DisplayRole), self.ROLE_LEVEL,
+             self.ROLE_COLOR, self.ROLE_REASONS],
+        )
+        return True
+
     # ---- 判据明细三色：与全局配色同源，QML 端不写死色值 ----------------
 
     @Property(str, constant=True)

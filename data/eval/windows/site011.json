@@ -1,0 +1,43 @@
+{
+  "site_id": "site011",
+  "name": "Shisper",
+  "lat": 36.35594,
+  "lon": 74.572267,
+  "n_events": 4,
+  "scene_id": "S2A_MSIL2A_20230912T054641_R048_T43SDA_20230912T121347",
+  "date": "2023-09-12",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site011.tif",
+  "shape": [
+    668,
+    541
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.52,
+  "tile": "T43SDA",
+  "years": [
+    2019,
+    2020,
+    2021,
+    2022
+  ],
+  "lake_type": "Ice dammed",
+  "country": "Pakistan",
+  "elev_m": 2605.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    74.542267,
+    36.32594,
+    74.602267,
+    36.38594
+  ],
+  "bbox_actual": [
+    74.541849,
+    36.325776,
+    74.602475,
+    36.386213
+  ],
+  "bounds_offset_px": 0.866,
+  "coverage": 0.9976,
+  "n_candidates": 31
+}

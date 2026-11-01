@@ -1,0 +1,42 @@
+{
+  "site_id": "site019",
+  "name": "Sosot",
+  "lat": 36.027,
+  "lon": 73.196,
+  "n_events": 3,
+  "scene_id": "S2B_MSIL2A_20240924T055629_R091_T43SCV_20240924T084127",
+  "date": "2024-09-24",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site019.tif",
+  "shape": [
+    676,
+    553
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 0.05,
+  "tile": "T43SCV",
+  "years": [
+    1994,
+    2005,
+    2012
+  ],
+  "lake_type": "Moraine dammed",
+  "country": "Pakistan",
+  "elev_m": 4485.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    73.166,
+    35.997,
+    73.226,
+    36.057
+  ],
+  "bbox_actual": [
+    73.164599,
+    35.99609,
+    73.227336,
+    36.05793
+  ],
+  "bounds_offset_px": 0.301,
+  "coverage": 0.9999,
+  "n_candidates": 93
+}

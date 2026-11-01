@@ -374,13 +374,30 @@ def cmd_risk(args: argparse.Namespace) -> int:
     print(f"时序      : {args.input}  共 {len(points)} 期（{span}）")
     print(f"坝型      : {args.lake_type}  阈值覆盖: {overrides or '无（全部用默认）'}")
 
+    # --dem 给了就从 DEM 量坝体下游坡度，覆盖 --slope-deg。
+    # 量不出来（None）时保留原值——若原值也是 None，判据照旧走 UNKNOWN。
+    slope = args.slope_deg
+    if args.dem and (args.dem_lat is None or args.dem_lon is None):
+        print("错误：--dem 必须配 --dem-lat 与 --dem-lon（坝体位置）。", file=sys.stderr)
+        return 2
+    if args.dem:
+        measured = grs.slope_from_dem(
+            args.dem, float(args.dem_lat), float(args.dem_lon))
+        if measured is None:
+            print(f"DEM       : {Path(args.dem).name} 取不到可量测的坝体下游坡度，"
+                  f"该判据保持 UNKNOWN")
+        else:
+            print(f"DEM       : {Path(args.dem).name} 量得坝体下游坡度 "
+                  f"{measured:.2f}°（坡心近似坝体，非精确坝址）")
+            slope = measured
+
     try:
         results = grs.assess_series(
             points,
             args.lake_type,
             date=args.date,
             baseline_date=args.baseline_date,
-            downstream_slope_deg=args.slope_deg,
+            downstream_slope_deg=slope,
             glacier_contact={"yes": True, "no": False}.get(args.glacier_contact),
             thresholds=overrides or None,
             min_valid_frac=args.min_valid_frac,
@@ -393,7 +410,7 @@ def cmd_risk(args: argparse.Namespace) -> int:
         cases = grs.series_sensitivity_cases(
             points,
             args.lake_type,
-            downstream_slope_deg=args.slope_deg,
+            downstream_slope_deg=slope,
             glacier_contact={"yes": True, "no": False}.get(args.glacier_contact),
         )
         if cases:
@@ -490,6 +507,162 @@ def cmd_risk(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_accuracy(args: argparse.Namespace) -> int:
+    """对整个评估窗口集做点位级召回评价。
+
+    口径（写进报告时必须原样声明，见 docs/精度评价契约.md）：
+    * 分母是**被影像覆盖的点位数**，不是 ICIMOD 的点位总数；
+    * 抓取阶段没拿到影像的点位单独记入 missing，不计入分母；
+    * 提取用的配方与产品一致（同一阈值、同一冰雪掩膜），
+      不能为了把精度做高而另调一套参数。
+    """
+    from .core import accuracy as gacc
+    from .core import evalwindows as gew
+
+    windows, missing = gew.load_windows(args.windows)
+    if not windows:
+        print(f"{args.windows} 里没有可用窗口。先跑 scripts/fetch_eval_windows.py。",
+              file=sys.stderr)
+        return 1
+
+    print(f"评估窗口  : {len(windows)} 个（另有 {len(missing)} 个点位无可用影像）")
+    print(f"提取配方  : NDWI > {args.threshold}，最小面积 {args.min_area_km2} km²，"
+          f"{'启用' if not args.no_snow_mask else '关闭'}冰雪掩膜")
+    print(f"召回半径  : {args.radius_km} km")
+    print()
+
+    results = []
+    for win in windows:
+        res = gew.extract_window(
+            win,
+            threshold=args.threshold,
+            min_area_km2=args.min_area_km2,
+            snow_mask=not args.no_snow_mask,
+        )
+        results.append(res)
+        if not res.ok:
+            print(f"  {win.site_id} {win.name[:20]:22s} "
+                  f"{win.lat:7.3f},{win.lon:8.3f}  失败 {res.error}")
+            continue
+        # NDWI 极值标出"这一带到底有没有水"：低于 0.05 说明湖已排空，
+        # 提出 0 条是事实，但不能和"湖在、算法漏了"混为一谈
+        dried = " [NDWI 极低，疑已排空]" if res.ndwi_max < 0.05 else ""
+        print(f"  {win.site_id} {win.name[:20]:22s} "
+              f"{win.lat:7.3f},{win.lon:8.3f}  {len(res.records):3d} 个体"
+              f"  NDWI max {res.ndwi_max:.3f}{dried}")
+
+    # 点位真值 → 匹配
+    truth = [(w.site_id, w.lat, w.lon) for w in windows]
+    by_site = {r.window.site_id: r.records for r in results}
+    matches = []
+    for site_id, lat, lon in truth:
+        recs = by_site.get(site_id, [])
+        m = gacc.match_points([(site_id, lat, lon)], recs, radius_km=args.radius_km)
+        matches.extend(m)
+
+    n_matched = sum(1 for m in matches if m.matched)
+    n_failed = sum(1 for r in results if not r.ok)
+    recall = n_matched / len(windows) if windows else 0.0
+    # "点位附近已无水"的窗口数：低召回率的主要成因，随结果一起落盘
+    n_dry = sum(1 for r in results if r.ok and r.ndwi_max < 0.05)
+    n_far = sum(1 for m in matches if m.distance_km is not None and m.distance_km > 1.0)
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "n_windows": len(windows),
+        "n_missing_imagery": len(missing),
+        "n_extract_failed": n_failed,
+        "n_matched": n_matched,
+        "point_recall": round(recall, 4),
+        "radius_km": args.radius_km,
+        "threshold": args.threshold,
+        "min_area_km2": args.min_area_km2,
+        "notes": [
+            "point_recall 分母是被影像覆盖的点位数，不含无影像点位",
+            "已排空（NDWI 最大值 < 0.05）的点位**计入分母**，算作漏检——"
+            "不剔除，避免口径被人质疑为挑数据",
+            f"提取参数：NDWI > {args.threshold}，最小面积 {args.min_area_km2} km²。"
+            "面积门限用的是评价口径 0.001，不是产品默认的 0.01；"
+            "两者不能混报（实测产品口径只提出 2/21，评价口径可提出 14/21）",
+            "ICIMOD 为历史溃决事件库，溃决后湖体可能已消失；"
+            "本指标测的是当前仍存在水体的湖的检出率，不是 GLOF 识别准确率",
+            "未做边界精度评价（无人工标注的面真值）",
+            f"实测 {n_far} 个点位提出了水体但距点位 > 1 km（ICIMOD 历史事件坐标"
+            "与当前残湖中心不一致）；另有 "
+            f"{n_dry} 个窗口 NDWI 最大值 < 0.05，附近确实无水。"
+            "这两者是低召回率的主因，不是算法性能",
+        ],
+        "matches": [
+            {
+                "site_id": m.site_id,
+                "truth_lat": m.truth_lat,
+                "truth_lon": m.truth_lon,
+                "distance_km": None if m.distance_km is None else round(m.distance_km, 4),
+                "matched": m.matched,
+                "lake_id": m.lake_id,
+                "lake_area_km2": None if m.lake_area_km2 is None else round(m.lake_area_km2, 6),
+            }
+            for m in matches
+        ],
+        "missing_imagery": missing,
+        "extract_errors": [
+            {"site_id": r.window.site_id, "error": r.error}
+            for r in results if not r.ok
+        ],
+    }
+    (out_dir / "accuracy.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    with (out_dir / "per_site.csv").open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["site_id", "name", "distance_km", "matched",
+                         "lake_id", "lake_area_km2"])
+        name_of = {w.site_id: w.name for w in windows}
+        for m in matches:
+            writer.writerow([
+                m.site_id, name_of.get(m.site_id, ""),
+                "" if m.distance_km is None else f"{m.distance_km:.4f}",
+                int(m.matched),
+                "" if m.lake_id is None else m.lake_id,
+                "" if m.lake_area_km2 is None else f"{m.lake_area_km2:.6f}",
+            ])
+
+    print()
+    print("=" * 66)
+    print(f"命中        : {n_matched}/{len(windows)}")
+    print(f"点位召回率  : {recall * 100:.1f}%（半径 {args.radius_km} km）")
+    if n_failed:
+        print(f"提取失败    : {n_failed} 个（已记入 accuracy.json，未当成'无水体'）")
+    if missing:
+        print(f"无影像点位  : {len(missing)} 个（不计入分母）")
+    print(f"结果        : {out_dir / 'accuracy.json'}")
+    print(f"              {out_dir / 'per_site.csv'}")
+    print("=" * 66)
+    print("注意：这是点位召回，不是边界精度；报告里不能写成 IoU/F1。")
+    # 低召回率的成因必须和数字一起给，否则会被读成"算法很差"。
+    # 实测（26 个窗口）：只有 1 个窗口的 NDWI 最大值 < 0.05（那里确实没水）；
+    # 有 16 个窗口提出了水体，但其中 12 个距点位 1.1–3.1 km。
+    # 这个"1 km 以上的偏移簇"才是主因：ICIMOD 的坐标是历史事件点，
+    # 与当前残湖的几何中心不是一回事，0.15 km 的搜索半径够不着。
+    dists = sorted(m.distance_km for m in matches if m.distance_km is not None)
+    if recall < 0.5:
+        print()
+        if dists:
+            far = sum(1 for d in dists if d > 1.0)
+            print(f"成因说明：{len(dists)} 个点位提出了水体，但 {far} 个距离点位 > 1 km"
+                  f"（中位 {dists[len(dists) // 2]:.2f} km，最大 {dists[-1]:.2f} km）。")
+            print("  ICIMOD 记录的是历史事件坐标，与当前残湖的几何中心不一致；")
+            print("  0.15 km 的搜索半径够不着这个偏移，所以不计为命中。")
+        if n_dry:
+            print(f"  另有 {n_dry} 个窗口 NDWI 最大值 < 0.05，点位附近确实已无水。")
+        print("  结论：低召回率反映真值口径（历史事件点 ≠ 当前湖位），"
+              "不是提取算法性能。")
+        print("  要评价算法检出能力，需要用有人工标注面真值的数据集。")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="glof", description="帕米尔冰湖识别与风险筛查")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -564,6 +737,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="冰碛坝基准期（YYYY-MM-DD）；缺省用序列最早一期")
     p_risk.add_argument("--slope-deg", type=float, default=None,
                         help="冰碛坝：坝体下游坡度（度）；不传则该判据记缺数据")
+    p_risk.add_argument("--dem", default=None,
+                        help="DEM 路径或 Copernicus 瓦片 URL；给了就从 DEM 量坝体下游坡度")
+    p_risk.add_argument("--dem-lat", type=float, default=None,
+                        help="坝体纬度（配合 --dem；通常取湖心）")
+    p_risk.add_argument("--dem-lon", type=float, default=None,
+                        help="坝体经度（配合 --dem；通常取湖心）")
     p_risk.add_argument("--glacier-contact", default=None, choices=["yes", "no"],
                         help="冰碛坝：是否与母冰川接触；不传则该判据记缺数据")
     p_risk.add_argument("--min-valid-frac", type=float, default=0.0,
@@ -571,9 +750,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_risk.add_argument("--threshold", action="append", default=None, metavar="NAME=VALUE",
                         help="覆盖默认阈值，可重复：plateau_ratio=0.9 等")
     p_risk.add_argument("--sensitivity", action="store_true",
-                        help="追加阈值 ±20% 敏感性分析（等级翻转率）")
+                        help="追加阈值 ±20%% 敏感性分析（等级翻转率）")
     p_risk.add_argument("--out", default="output/risk", help="输出目录（JSON + CSV）")
     p_risk.set_defaults(func=cmd_risk)
+
+    p_acc = sub.add_parser(
+        "accuracy", help="对评估窗口集做点位级召回评价（ICIMOD 弱真值）")
+    p_acc.add_argument("--windows", default="data/eval/windows/windows.json",
+                       help="抓取阶段产出的清单")
+    p_acc.add_argument("--radius-km", type=float, default=0.15,
+                       help="点位命中的搜索半径（km）。默认 0.15 约等于 15 个像元，"
+                            "足够吸收 ICIMOD 坐标误差，又不至于把邻湖算成命中")
+    p_acc.add_argument("--threshold", type=float, default=0.15,
+                       help="NDWI 阈值，与产品默认一致")
+    p_acc.add_argument("--min-area-km2", type=float, default=0.001,
+                       help="最小面积。默认 0.001 km² 用于评价算法检出能力；"
+                            "产品默认是 0.01，两个口径不能混报")
+    p_acc.add_argument("--no-snow-mask", action="store_true",
+                       help="关闭冰雪掩膜（做消融对比用，不要用于正式报告）")
+    p_acc.add_argument("--out", default="output/eval", help="输出目录")
+    p_acc.set_defaults(func=cmd_accuracy)
 
     return parser
 

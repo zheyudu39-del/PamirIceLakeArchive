@@ -1,0 +1,42 @@
+{
+  "site_id": "site017",
+  "name": "Warghut",
+  "lat": 36.746817,
+  "lon": 74.002922,
+  "n_events": 3,
+  "scene_id": "S2A_MSIL2A_20230912T054641_R048_T43SDA_20230912T121347",
+  "date": "2023-09-12",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site017.tif",
+  "shape": [
+    671,
+    543
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.36,
+  "tile": "T43SDA",
+  "years": [
+    1909,
+    1978,
+    1990
+  ],
+  "lake_type": "Ice dammed",
+  "country": "Pakistan",
+  "elev_m": 3409.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    73.972922,
+    36.716817,
+    74.032922,
+    36.776817
+  ],
+  "bbox_actual": [
+    73.972061,
+    36.716364,
+    74.033661,
+    36.777353
+  ],
+  "bounds_offset_px": 0.55,
+  "coverage": 0.999,
+  "n_candidates": 69
+}

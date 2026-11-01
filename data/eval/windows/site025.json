@@ -1,0 +1,41 @@
+{
+  "site_id": "site025",
+  "name": "Unknown",
+  "lat": 36.176,
+  "lon": 74.761,
+  "n_events": 2,
+  "scene_id": "S2A_MSIL2A_20230912T054641_R048_T43SDA_20230912T121347",
+  "date": "2023-09-12",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site025.tif",
+  "shape": [
+    667,
+    541
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.33,
+  "tile": "T43SDA",
+  "years": [
+    1892,
+    1912
+  ],
+  "lake_type": "Ice dammed",
+  "country": "Pakistan",
+  "elev_m": 2918.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    74.731,
+    36.146,
+    74.791,
+    36.206
+  ],
+  "bbox_actual": [
+    74.73079,
+    36.145859,
+    74.791132,
+    36.206113
+  ],
+  "bounds_offset_px": 0.243,
+  "coverage": 0.9994,
+  "n_candidates": 31
+}

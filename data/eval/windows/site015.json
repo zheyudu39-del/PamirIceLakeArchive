@@ -1,0 +1,42 @@
+{
+  "site_id": "site015",
+  "name": "Chateboi",
+  "lat": 36.84573,
+  "lon": 73.89904,
+  "n_events": 3,
+  "scene_id": "S2A_MSIL2A_20230813T054641_R048_T43SCA_20241020T061215",
+  "date": "2023-08-13",
+  "cloud": 0.0,
+  "file": "data/eval/windows/site015.tif",
+  "shape": [
+    672,
+    543
+  ],
+  "pixel_m": 10.0,
+  "size_mb": 4.66,
+  "tile": "T43SCA",
+  "years": [
+    1972,
+    1977,
+    2000
+  ],
+  "lake_type": "Ice dammed",
+  "country": "Pakistan",
+  "elev_m": 3680.0,
+  "pad_deg": 0.030000000000001137,
+  "bbox_requested": [
+    73.86904,
+    36.81573,
+    73.92904,
+    36.87573
+  ],
+  "bbox_actual": [
+    73.868072,
+    36.81521,
+    73.929834,
+    36.876341
+  ],
+  "bounds_offset_px": 0.745,
+  "coverage": 0.9987,
+  "n_candidates": 69
+}

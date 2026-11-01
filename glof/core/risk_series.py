@@ -49,6 +49,11 @@ from typing import Any, Mapping, Sequence
 from . import risk as grisk
 from .timeseries import SeriesPoint
 
+#: 低于这个角度就认为"没量到坝体"：湖面本身是平的，用湖心当代替点必然接近 0。
+#: 1° 是个宽松下限——真正的冰碛坝下游坡度在 10° 量级（risk.DEFAULT_THRESHOLDS
+#: 的 downstream_slope_deg=10 就是按这个量级定的），量出来不足 1° 说明点位错了。
+MIN_MEASURABLE_SLOPE_DEG = 1.0
+
 __all__ = [
     "SeriesAssessment",
     "read_series_csv",
@@ -159,6 +164,57 @@ def holdout_reference_areas(points: Sequence[SeriesPoint], date: str) -> tuple[l
             f"年内回退：同年前 {len(earlier_same_year)} 期估平台（充水期上包络偏低，比值可能虚高）",
         )
     return [], "无可用参照：跨年与年内早期观测都不足 3 期"
+
+
+def slope_from_dem(
+    dem_url_or_path: str,
+    lake_lat: float,
+    lake_lon: float,
+    *,
+    pad_deg: float = 0.03,
+    dem: np.ndarray | None = None,
+    transform=None,
+) -> float | None:
+    """从 DEM 量坝体下游坡度，供 ``assess_series(downstream_slope_deg=...)``。
+
+    为什么要单独一个函数：DEM 是外面的一层（网络或本地文件），
+    而 risk_series 的其余部分是纯计算。把读取挡在这里，判定逻辑就能
+    在无网络环境下跑。
+
+    返回 None 的条件与 ``terrain.downstream_slope`` 一致：DEM 取不到、
+    坝体在 DEM 外、或 500 m 剖面不完整。调用方据此让判据走 UNKNOWN，
+    **不要把 None 换成 0**——那会把"没量"说成"量出来是平的"。
+
+    Parameters
+    ----------
+    dem_url_or_path
+        Copernicus 瓦片 URL 或本地 GeoTIFF。传 ``""`` 时使用 ``dem``/``transform``。
+    lake_lat, lake_lon
+        坝体位置。湖的质心是个近似——真实坝体在湖的下游端，
+        这个偏差写进返回值的日志里，不装作是精确定位。
+    """
+    from . import terrain as gterr  # 延迟导入：只有真要读 DEM 时才拉起 rasterio
+
+    if dem is None:
+        if not dem_url_or_path:
+            return None
+        bbox = (lake_lon - pad_deg, lake_lat - pad_deg,
+                lake_lon + pad_deg, lake_lat + pad_deg)
+        try:
+            dem, transform = gterr.read_dem_bounds(dem_url_or_path, bbox)
+        except Exception:  # noqa: BLE001 - 取不到 DEM 是环境问题，不炸判定
+            return None
+    # 湖心落在湖面上，量出来的是"湖面平不平"，不是"坝体下游陡不陡"。
+    # 实测克亚吉尔湖心：高程 4769 m，四周 500 m 只有 +10~+250 m 的岸坡，
+    # 量得 -0.01°；而同一窗口内真实坡地可达 52°（中位 19°）。
+    # 这个数值交给 risk 会被当成"量测成功、坡度为零"，比缺数据更危险，
+    # 所以近水平的结果一律退回 None，走 UNKNOWN。
+    slope = gterr.downstream_slope(dem, transform, lake_lat, lake_lon)
+    if slope is None:
+        return None
+    if abs(slope) < MIN_MEASURABLE_SLOPE_DEG:
+        return None
+    return slope
 
 
 def assess_series(

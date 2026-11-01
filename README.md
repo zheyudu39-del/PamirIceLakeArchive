@@ -1,10 +1,82 @@
-# GLOF — 帕米尔高原冰湖识别与溃决风险筛查
+# 帕米尔冰湖档案
 
-挑战杯科技发明制作类作品。目标：在帕米尔高原多云多雪条件下，把光学与雷达合成一条
-可复现的冰湖自动提取流水线，并输出下游中巴公路（G314）沿线的暴露度清单。
+> 给帕米尔高原的每个冰湖建一份**可审计的档案**。
+> 冰湖溃决（GLOF）是高原最致命的自然灾害之一，但风险判断长期依赖专家打分：
+> 同一个湖，换个人看，结论可能不同，且没人能复算。
+> 本项目把这件事拆成可验证的步骤——提取、测面积、按规则判级——
+> 每一步的输入、阈值和结果都留痕，任何人可以拿同一景影像复现同一个数。
 
-**当前阶段**：QML 主窗口已建成并通过全部冒烟（左参数面板 + 地图 + 时序曲线/风险表），
-风险分级贯通 CLI 与时序链路。剩余后补项见文档 §8.3（SAR / 精度评价 / 暴露度 / 报告导出 / 打包）。
+软件全称（软著申报用）：**帕米尔高原冰湖识别与风险评估软件 V1.0**
+许可：MIT（见 `LICENSE`）
+
+---
+
+## 这个系统做什么
+
+输入一景 Sentinel-2 影像，输出一份冰湖清单，每个湖带面积、质心、风险等级
+和**逐条判据的实测值**：
+
+```
+[命中]  面积/平台比值 = 1.0003（阈值 0.95）：1.8254 km² / 平台 1.8248 km²
+```
+
+三件事值得单独说：
+
+**1. 判据是规则，不是权重。** 冰坝湖看「面积逼近平台值的程度」——冰坝湖蓄到
+溢流口就不再上涨，所以这个比值有明确物理含义。冰碛坝没有稳定溢流口，
+改用扩张速率 + 坝体下游坡度 + 母冰川接触三条。每条判据只控制自己那个开关，
+不像权重那样把不同量纲的量混成一个数。
+
+**2. 缺数据就说不知道。** 拿不到 DEM 时，坡度判据输出 `UNKNOWN` 并写明原因，
+而不是当成 0 分。有缺口时最高只给 `MEDIUM`，一条没中也给 `UNKNOWN` 而不是
+`LOW`——**不把「不知道」当「安全」**。
+
+**3. 阈值可以置疑。** 0.95 这个数不是拍脑袋：`--sensitivity` 会跑 ±20% 的
+阈值扰动，报出等级翻转率（实测最大 6.2%），并列出哪几个湖在哪个方向翻转。
+
+## 研究区
+
+塔什库尔干塔吉克自治县（喀什地区）分两块，行政上同属一县：
+
+| 区域 | 经度 | 冰湖 | 溃决记录 |
+|---|---|---|---|
+| 西部帕米尔（慕士塔格/公格尔） | 75°E | 4 个 | 0 |
+| 东部喀喇昆仑克勒青河 | 77°E | 4 个 | 38 次（Kyagar 一湖占 34 次） |
+
+克亚吉尔（Kyagar）冰坝湖 2018-08 的溃决有完整的充水—溃决曲线可验算，
+是本项目的主验证案例。
+
+---
+
+## 现在完成到什么程度
+
+**能跑的部分**（12 个验证脚本、170+ 断言全部通过）：
+
+| 能力 | 入口 | 状态 |
+|---|---|---|
+| 影像检索与下载 | `glof.cli fetch` | ✅ Planetary Computer，免账号 |
+| 水体提取 + 面积统计 | `glof.cli extract` | ✅ |
+| 溃决湖编目查询 | `glof.cli inventory` | ✅ ICIMOD HMA GLOF v4.0 |
+| 分坝型风险分级 | `glof.cli risk` | ✅ 含阈值敏感性 |
+| 精度评价（弱真值） | `glof.cli accuracy` | ⚠️ 见下 |
+| DEM 坝体下游坡度 | `glof.cli risk --dem` | ⚠️ 见下 |
+| 桌面界面 | `python -m glof.ui` | ✅ QML，含地图/时序/风险表 |
+
+**两项需要如实说明的局限**——这两条比任何数字都重要：
+
+- **精度评价**：以 ICIMOD 历史溃决点作弱真值，点位召回率 11.1%。
+  未命中主因不是算法：17 个窗口提出了水体，其中 13 个距点位超过 1 km
+  （中位 1.37 km）。**历史事件坐标与当前残湖的几何中心本来就不一致**。
+  所以这个数测不了算法检出率，方法不适配，结论已在
+  `docs/精度评价契约.md` §6 完整记录。
+- **DEM 坡度**：用湖心代替坝体位置是错的。实测克亚吉尔湖心四周 500 m
+  只有 +10~+250 m 岸坡，量出 -0.01°；真实坡地可达 52°。
+  已加保护（`MIN_MEASURABLE_SLOPE_DEG = 1.0`）把近水平结果退回 `UNKNOWN`，
+  不把假值送进判定。要真正用上需坝体位置，不是湖心。
+
+**尚未实现**：SAR 分支（方案中写了双源融合）、G314 暴露度清单、
+报告导出、PyInstaller 打包。已实现部分与计划部分的比例见
+`docs/选题诊断与修正建议.md` §8。
 
 ---
 
@@ -76,17 +148,61 @@ glof/
 │   ├── timeseries.py 时序 API：build_series / 平台面积（口径转发 risk）
 │   ├── synthetic.py 合成测试影像（仅测试用）
 ├── cli.py           无界面批量入口（info / fetch / inventory / extract）
-└── ui/              界面层（未创建，只允许调用 core 的公开接口）
+├── core/accuracy.py   点位匹配、混淆矩阵、球面多边形 IoU（纯几何，不碰 rasterio）
+├── core/terrain.py    DEM 坡度、坝体下游坡度、Copernicus 瓦片读取
+├── core/evalwindows.py 评估窗口读取与逐窗提取（口径与产品一致）
+├── cli.py            无界面批量入口（info / fetch / inventory / extract / risk / accuracy）
+├── ui/               界面层（QML，只允许调用 core 的公开接口）
+│   ├── app_state.py  装配与长任务派发
+│   ├── map_controller.py / lake_model.py / series_controller.py
+│   └── qml/          Main / MapView / SeriesChart / LakeTable
 scripts/
-├── verify_pipeline.py    提取精度验证（9 条断言）
+├── verify_pipeline.py    提取精度验证（12 条断言）
 ├── verify_resampling.py  逐波段重采样验证（14 条断言）
 ├── verify_risk.py        风险分级验证（25 条断言，含敏感性分析）
-├── verify_risk_series.py 时序→风险链路验证（23 条断言：留出法/年内回退/缺数据诚实记账）
-├── ui_spike.py           界面性能 gate（QGraphicsView 拖真实影像，4 条判定）
+├── verify_risk_series.py 时序→风险链路验证（23 条断言）
+├── verify_accuracy.py    精度评价模块验证（48 条断言）
+├── verify_terrain.py     DEM 坡度验证（39 条断言，含真实 Copernicus 用例）
+├── verify_event_years.py ICIMOD 点位画像验证（12 条断言）
+├── fetch_eval_windows.py 55 个溃决湖点位 → Sentinel-2 小窗口（评价数据集）
+├── ui_spike.py           界面性能 gate（4 条判定）
+├── smoke_ui_*.py         QML 冒烟（地图 26 / 时序 / 风险表 35 / 主窗口 54）
 ├── kyagar_series.py      克亚吉尔年际时序（业务参数 + 出图）
 ├── kyagar_dense.py       2018 溃决前加密时序
-└── preview_scene.py      真彩色 + NDWI 预览图，用于肉眼核对
+├── preview_scene.py      真彩色 + NDWI 预览图，用于肉眼核对
+└── capture_gui.py        截取运行中的窗口（答辩存证用）
 ```
+
+**分层是硬约束。** `core/` 禁止 import 任何 Qt / 界面库，`ui/` 只调 core 的公开接口。
+验证全部走脚本，界面出问题不会拖死算法主线。
+
+---
+
+## 数据（不入库，用脚本重建）
+
+影像和 DEM 体积大，仓库里只放**清单**（记录抽样口径，是复现的前提），
+不放大文件。重建方式：
+
+```bash
+# 1. 评估数据集：55 个溃决湖点位各取 ±0.03° 小窗（约 120 MB，需联网）
+python scripts/fetch_eval_windows.py
+
+# 2. 单景影像：任意 bbox，Planetary Computer 免账号
+python -m glof.cli fetch --bbox 77.15 35.60 77.30 35.75 \
+    --start 2025-07-01 --end 2025-09-30 --max-cloud 10 --save 2
+
+# 3. DEM：不需要下载，Copernicus GLO-30 支持按 bbox 直接读远程 COG
+python -m glof.cli risk --input <series.csv> --lake-type moraine \
+    --dem "https://copernicus-dem-30m.s3.amazonaws.com/.../Copernicus_DSM_COG_10_N35_00_E077_00_DEM.tif" \
+    --dem-lat 35.677 --dem-lon 77.191
+
+# 4. ICIMOD 溃决事件库：从 ICIMOD 官网申请后放到 data/raw/
+#    （Data Download Agreement 要求登记用途，仓库不代为分发）
+```
+
+`data/eval/windows/windows.json` 与 `missing.json` **已入库**——
+它们记录了每个点位用了哪景影像、什么日期、云量多少、覆盖是否完整，
+换台机器重跑脚本会得到同一批影像。
 
 **分层是硬约束。** 前期所有验证都走 `cli.py`，界面拖延不会拖死算法主线。
 
@@ -119,6 +235,11 @@ scene = load_scene({
 # 想统一到 20 m 分析
 scene = load_scene("scene.tif", S2_L2A_6BAND, ref_resolution=20.0)
 ```
+
+**同一路径的波段共用一个 GDAL 句柄。** 像素交错（`interleave=pixel`）的 GeoTIFF
+每读一个波段都要解压整块；各波段各开一个句柄时块缓存互不共享，同一块会被解压
+N 次。实测 6 波段 spike 场景从 3887 ms 降到 826 ms（`docs` §8.7）。
+`load_scene` 内部按 `os.fspath(path)` 去重，关闭时也只关去重后的句柄。
 
 实测（`scripts/verify_resampling.py`）：把 SWIR 拆成独立的 20 m 文件后，
 NDWI 与单文件**完全一致**，NDSI 中位差异 0.0049、95 分位 0.0146（雪/湖边界的插值误差），
@@ -215,9 +336,11 @@ NDWI 与单文件完全一致，湖泊面积差异 0.000%，NDSI 中位差异 0.
 2. **`glof/core/timeseries.py` 时序 API** ✅ —— `build_series(bbox, years)`，
    按有效像元数选景；平台面积估算转发 `risk.estimate_plateau_area`，全项目单一口径。
 3. **UI spike** ✅ —— 2686×3056 真实场景（8.2 MP）整景解码塞 QGraphicsPixmapItem：
-   缩放 P95 8.6 ms、平移 P95 8.0 ms、叠加 200 个多边形 2.9 ms、
-   释放影像栈后稳态 165 MB、启动 3.9 s。**结论：不需要按视图窗口分级读取，
-   直接整景上。** 证据截图在 `output/ui_spike/`。
+   多次复跑区间为缩放 P95 10–12 ms、平移 P95 8–11 ms、叠加 200 个多边形 3–4 ms、
+   释放影像栈后稳态 161 MB、启动 2.2–2.5 s（读栈约 1.5–1.7 + 拉伸约 0.7 + QImage 0.02）。
+   **结论：不需要按视图窗口分级读取，直接整景上。** 证据截图在 `output/ui_spike/`。
+   启动时间原为 5.14–5.18 s，超 5 s gate——根因是逐波段各开 GDAL 句柄、像素交错的块
+   被重复解压 6 次；修好后读栈 4.4 s → 1.5 s，详见文档 §8.7。
 
 **现在开工主窗口**：左参数面板 + 中地图 + 下时序曲线/风险表，**前端改用 QML（Qt Quick）**
 （QQuickImageProvider 承接栅格 + Flickable 缩放平移 + Shapes 叠风险多边形 + QtCharts 时序 +
