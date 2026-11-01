@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
 __all__ = [
@@ -35,6 +37,7 @@ __all__ = [
     "SceneRef",
     "search_sentinel2",
     "sign_scene",
+    "clear_sas_cache",
     "BAND_TO_S2",
     "S2_NATIVE_RES",
 ]
@@ -81,6 +84,47 @@ def _http_json(url: str, payload: dict | None = None, timeout: int = 60) -> dict
     req = urllib.request.Request(url, data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
+
+
+# ---- SAS token 缓存 -------------------------------------------------------
+# Planetary Computer 的 SAS token 对**所有** Sentinel-2 资产通用，有效期约
+# 1 小时。原实现每处理一景就重新请求一次：实测单次 1.1 s，25 景就是 27 s
+# 纯浪费（见 docs/时序检索为什么慢.md）。
+#
+# 缓存按 collection 分开（token 的作用域是 collection）。过期时间打七折
+# 用——服务端说的 1 小时未必是保守值，提前 30% 过期比拿到 401 再重试便宜。
+_SAS_CACHE: dict[str, tuple[str, float]] = {}
+_SAS_SAFETY = 0.7
+
+
+def _sas_token(collection: str = COLLECTION, *, force: bool = False) -> str:
+    """取 Planetary Computer 的 SAS token，带进程内缓存。"""
+    now = time.monotonic()
+    if not force:
+        hit = _SAS_CACHE.get(collection)
+        if hit is not None and hit[1] > now:
+            return hit[0]
+
+    payload = _http_json(PC_SAS_TEMPLATE.format(collection=collection))
+    token = payload["token"]
+    # 接口给的是 ISO 时间串；解析失败就按 1 小时 × 安全系数兜底，
+    # 不去猜格式——这个值只用于决定什么时候重新取，算不准的代价只是多取一次。
+    ttl = 3600.0
+    expires = payload.get("expiry") or payload.get("expires")
+    if expires:
+        try:
+            dt = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+            ttl = (dt - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError):
+            pass
+    ttl = max(60.0, min(ttl * _SAS_SAFETY, 3600.0))
+    _SAS_CACHE[collection] = (token, now + ttl)
+    return token
+
+
+def clear_sas_cache() -> None:
+    """清掉 SAS 缓存（测试用；正常运行不需要调用）。"""
+    _SAS_CACHE.clear()
 
 
 @dataclass
@@ -206,7 +250,7 @@ def sign_scene(
     sources = ref.sources(bands)
 
     if ref.platform == "pc":
-        token = _http_json(PC_SAS_TEMPLATE.format(collection=collection))["token"]
+        token = _sas_token(collection)
         signed = {
             band: (f"{url}{'&' if '?' in url else '?'}{token}", bidx)
             for band, (url, bidx) in sources.items()

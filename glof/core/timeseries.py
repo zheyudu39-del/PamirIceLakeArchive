@@ -104,9 +104,18 @@ class SeriesPoint:
     water_frac: float = float("nan")
 
 
+#: 时序只读这 3 个波段。算 NDWI 要 green+nir，冰雪掩膜要 green+swir1，
+#: blue 与 swir2 **在这个流程里完全没用到**。原先按 6 波段读，白拉 1/3 的流量。
+#: 实测单景 6 波段要 9–30 s（瓶颈是下行带宽，见 docs/时序检索为什么慢.md），
+#: 减到 3 个能省掉其中约一半。
+#:
+#: 注意：改这个元组会改变 Scene 的 key 集合，_measure 里只能取这三项。
+SERIES_BANDS = ("green", "nir", "swir1")
+
+
 def _measure(ref: gstac.SceneRef, bbox: Sequence[float]) -> SeriesPoint:
     """读一景、算一期面积。失败时抛异常，由调用方决定是否跳过。"""
-    sources, headers = gstac.sign_scene(ref)
+    sources, headers = gstac.sign_scene(ref, bands=SERIES_BANDS)
     scene = gio.load_scene(sources, S2_L2A_6BAND, bounds=bbox, http_headers=headers or None)
 
     green, nir = scene["green"], scene["nir"]

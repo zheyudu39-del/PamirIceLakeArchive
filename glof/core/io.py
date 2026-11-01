@@ -31,6 +31,7 @@ import csv
 import json
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -53,6 +54,16 @@ __all__ = [
 ]
 
 _BAND_NAMES = ("blue", "green", "red", "nir", "swir1", "swir2")
+
+
+def _is_remote(source: str | Path) -> bool:
+    """是否是远程 URL（http/https/s3 等）。
+
+    只用来决定"要不要并发读"：远程各波段是独立资源、并发有收益；
+    本地文件并发无收益且会争抢 GDAL 块缓存。
+    """
+    text = os.fspath(source)
+    return text.startswith(("http://", "https://", "s3://", "gs://", "az://"))
 
 BandSource = str | Path | tuple[str | Path, int]
 
@@ -143,13 +154,23 @@ def _normalize_sources(source: Any, spec: BandSpec) -> tuple[dict[str, tuple[str
     explicit: set[str] = set()
     for name in needed:
         if name not in source:
-            raise ValueError(f"缺少波段 {name!r} 的数据源。需要：{needed}")
+            # 映射**可以只给一部分波段**：远程读一景的成本与波段数成正比
+            # （见 docs/时序检索为什么慢.md），时序流程只用得上 3 个。
+            # 缺的波段就是不读，而不是报错——但至少要有一个，否则下面
+            # 选参考网格时会 IndexError。
+            continue
         value = source[name]
         if isinstance(value, (tuple, list)):
             out[name] = (value[0], int(value[1]))
             explicit.add(name)
         else:
             out[name] = (value, 1)
+
+    if not out:
+        raise ValueError(
+            f"映射里没有可用波段。spec {spec.name} 支持 {needed}，"
+            f"收到 {sorted(source)}。至少给一个。"
+        )
     return out, explicit
 
 
@@ -304,8 +325,13 @@ def load_scene(
             )
 
             # ---- 3. 逐波段读入并重采样 ----
-            data: dict[str, np.ndarray] = {}
-            for name, ds in handles.items():
+            #
+            # 远程 COG 时各波段是**独立的 HTTP 资源**（PC 的 S2 每景 13 个文件），
+            # 没法共享连接。串行读实测 9.4 s/景，并发后压到最慢那个的量级
+            # （见 docs/时序检索为什么慢.md）。本地文件保持串行——并发读同一
+            # 个文件没有收益，还会让 GDAL 块缓存互相踩。
+            def read_band(name: str):
+                ds = handles[name]
                 _, bidx = band_sources[name]
                 src_px_per_target = target_res / resolutions[name]
                 src_win = Window(
@@ -321,7 +347,29 @@ def load_scene(
                     resampling=resampling,
                     masked=True,
                 )
-                data[name] = (arr.astype(np.float32) / scale).filled(np.nan)
+                return (arr.astype(np.float32) / scale).filled(np.nan)
+
+            names = list(handles)
+            data: dict[str, np.ndarray] = {}
+            # 并发的前提：各波段是**不同**的远程资源。同一个 Dataset 句柄不支持
+            # 多线程并发 read（GDAL 的 dataset 不是线程安全的），所以只要有两个
+            # 波段共用一个句柄就必须退回串行。
+            distinct_handles = len({id(ds) for ds in handles.values()}) == len(names)
+            can_parallel = (
+                len(names) > 1
+                and distinct_handles
+                and all(_is_remote(band_sources[n][0]) for n in names)
+            )
+            if can_parallel:
+                # max_workers 取波段数与 8 的较小值：S2 最多 6 个波段，
+                # 再高也不会更快，只是把请求压在同一个域上更容易被限流。
+                with ThreadPoolExecutor(max_workers=min(len(names), 8)) as pool:
+                    futures = {n: pool.submit(read_band, n) for n in names}
+                    for n in names:
+                        data[n] = futures[n].result()   # 异常原样抛出
+            else:
+                for n in names:
+                    data[n] = read_band(n)
 
             transform = (
                 ref_transform
