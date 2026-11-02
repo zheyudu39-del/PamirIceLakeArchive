@@ -301,6 +301,26 @@ def main() -> int:
           res_nan[0].slope_deg is None, repr(res_nan[0].slope_deg))
     check("全 nodata 的 note 说明是边界高程读不到", "nodata" in res_nan[0].note, res_nan[0].note)
 
+    # 上一条只覆盖「dam 也是 None」。还有一条独立路径：坝体估出来了、
+    # 但下游 500 m 剖面不完整 -> downstream_slope 返回 None。
+    # 把这条 None 改成 0.0，上面任何断言都不会失败（实测：改坏后仍 43/43 全过），
+    # 所以必须单独造一个「有坝体、没坡度」的输入把这条路径钉住。
+    print()
+    print("步骤 6b / 有坝体但坡度量不到：必须是 None，不是 0")
+    patch = np.where(
+        (np.mgrid[0:N, 0:N][0] - PIT_CENTER) ** 2
+        + (np.mgrid[0:N, 0:N][1] - PIT_CENTER) ** 2 <= 100 ** 2,
+        dem, np.nan,
+    )
+    res_part = gdam.slope_from_dam([rec], patch, transform, "EPSG:4326")
+    part = res_part[0]
+    check("坝体估出来了（dam 不是 None）", part.dam is not None)
+    check("剖面不完整时 slope_deg 是 None，不是 0", part.slope_deg is None,
+          repr(part.slope_deg))
+    check("剖面不完整时 used_dam_position 为 False（没量到就不算用上）",
+          part.used_dam_position is False)
+    check("剖面不完整的 note 说明坡度未量到", "剖面" in part.note, part.note)
+
     print()
     print("=" * 74)
     print("步骤 7 / 退化情形：正圆湖 + 完全平坦 DEM")
@@ -331,6 +351,85 @@ def main() -> int:
     check("出口落在质心上时不崩，方位角仍可定义",
           math.isfinite(az_deg) and 0.0 <= az_deg < 360.0, f"{az_deg:.1f}°")
 
+    # 边界只有一个点读得到高程时，「散布」无定义 -> None，不是 0。
+    # 写成 0 会被下游读成「边界很平、出口可疑」，但真实情况是「根本没法判断」。
+    # 用 n_samples=8 才能保证恰好一个采样点落进那个有效像元：
+    # 默认 360 个点在 20 像元半径的圆上会反复采到同一像元，散布就变成 0 了。
+    sparse = np.full((100, 100), np.nan)
+    sparse[57, 68] = 4600.0
+    one_pt = gdam.dam_position(
+        Point(LON0 + 50 * RES, LAT0 - 50 * RES).buffer(20 * RES, quad_segs=64),
+        sparse, Affine(RES, 0.0, LON0, 0.0, -RES, LAT0), "EPSG:4326",
+        n_samples=8,
+    )
+    check("只有一个边界点有高程时仍能定位出口", one_pt is not None)
+    check("只有一个边界点时散布是 None，不是 0（没量到≠量到零）",
+          one_pt is not None and one_pt.boundary_relief_m is None,
+          repr(one_pt.boundary_relief_m) if one_pt else "None")
+
+    print()
+    print("=" * 74)
+    print("步骤 7b / 凹湖：下游方位必须朝湖外，不能被质心带偏")
+    print("=" * 74)
+
+    # 弯月形湖。凸湖上「质心 -> 出口」等于外法线，凹湖上不等于：
+    # 实测未修复前，200 个边界采样点里有 30 个点的下游方向指回湖内。
+    from shapely.geometry import Point as _P
+    from pyproj import Geod
+
+    _geod = Geod(ellps="WGS84")
+    crescent = (
+        _P(LON0, LAT0).buffer(0.01, quad_segs=128)
+        .difference(_P(LON0 + 0.008, LAT0).buffer(0.009, quad_segs=128))
+    )
+    n_into = 0
+    n_probe = 200
+    for i in range(n_probe):
+        p = crescent.exterior.interpolate(i / n_probe, normalized=True)
+        az_i = gdam.downstream_azimuth(crescent, p.x, p.y)
+        lon_i, lat_i, _ = _geod.fwd(p.x, p.y, az_i, 50.0)
+        if crescent.contains(_P(lon_i, lat_i)):
+            n_into += 1
+    check("弯月形湖：200 个边界点的下游方向没有一个指回湖内",
+          n_into == 0, f"指回湖内 {n_into}/{n_probe}")
+
+    # 随机锯齿状多边形上也不能大面积指回湖里。固定种子，结果可复现。
+    # 门槛 2%：实测多尺度探针 1.28%、单尺度 3.10%、旧的质心法 8.18%。
+    # 卡在 2% 是为了让「退回质心法」这种改动一定会被抓到。
+    import random
+
+    rng = random.Random(7)
+    n_bad = n_tot = 0
+    for _ in range(30):
+        k = rng.randint(6, 20)
+        angs = sorted(rng.uniform(0.0, 2.0 * math.pi) for _ in range(k))
+        pts = [
+            (LON0 + rng.uniform(0.002, 0.012) * math.cos(a),
+             LAT0 + rng.uniform(0.002, 0.012) * math.sin(a))
+            for a in angs
+        ]
+        shape_i = Polygon(pts)
+        if not shape_i.is_valid:
+            shape_i = shape_i.buffer(0)
+        if shape_i.is_empty or shape_i.geom_type != "Polygon":
+            continue
+        for i in range(10):
+            p = shape_i.exterior.interpolate(i / 10.0, normalized=True)
+            az_i = gdam.downstream_azimuth(shape_i, p.x, p.y)
+            for dist in (5.0, 20.0, 50.0):
+                lon_i, lat_i, _ = _geod.fwd(p.x, p.y, az_i, dist)
+                n_tot += 1
+                if shape_i.contains(_P(lon_i, lat_i)):
+                    n_bad += 1
+    rate = n_bad / n_tot if n_tot else 0.0
+    check("随机多边形：下游方向指回湖内的比例 < 2%（实测 1.28%）",
+          rate < 0.02, f"{n_bad}/{n_tot} = {rate:.2%}")
+
+    # 方位角必须落在 [0, 360)：负零经 % 360.0 会变成 360.0（实测 -1e-16 -> 360.0）。
+    check("方位角归一化：负零不会变成 360.0", gdam._normalize_azimuth(-1e-16) == 0.0,
+          repr(gdam._normalize_azimuth(-1e-16)))
+    check("方位角归一化：360.0 回到 0.0", gdam._normalize_azimuth(360.0) == 0.0)
+
     print()
     print("=" * 74)
     print("步骤 8 / 反向用例：错参数必须 ValueError")
@@ -346,6 +445,10 @@ def main() -> int:
                        lambda: gdam.outlet_point(pit, np.zeros(10), transform, "EPSG:4326"))
     expect_value_error("n_samples < 8 抛 ValueError",
                        lambda: gdam.outlet_point(pit, dem, transform, "EPSG:4326", n_samples=4))
+    # dam_position 也必须校验：早先只有 outlet_point 校验，dam_position(n_samples=1)
+    # 会静默地只采一个边界点并把它当出口返回（实测返回了一个 DamEstimate）。
+    expect_value_error("dam_position 的 n_samples < 8 也要抛 ValueError（两条路径同一口径）",
+                       lambda: gdam.dam_position(pit, dem, transform, "EPSG:4326", n_samples=1))
     expect_value_error("search_m = 0 抛 ValueError",
                        lambda: gdam.slope_from_dam([rec], dem, transform, "EPSG:4326", search_m=0.0))
     expect_value_error("几何无效时 downstream_azimuth 抛 ValueError",
@@ -442,7 +545,7 @@ if __name__ == "__main__":
         print(f"失败 {len(FAILURES)}/{CHECKS[0]} 项：{', '.join(FAILURES)}")
         raise SystemExit(1)
     print(f"全部通过（{CHECKS[0]} 项断言）。口径：坝体 = 湖边界 DEM 最低点，"
-          f"下游方位 = 质心->出口的反方向；坡度只来自 terrain.downstream_slope；"
+          f"下游方位 = 出口处朝湖外的边界法线；坡度只来自 terrain.downstream_slope；"
           f"算不出来返回 None，不是 0。")
     print("=" * 74)
     raise SystemExit(code)

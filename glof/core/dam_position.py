@@ -3,15 +3,20 @@
 为什么需要这个模块
 ------------------
 ``risk_series.slope_from_dem()`` 早先用湖的质心当坝体位置，实测克亚吉尔湖心
-高程 4769 m，四周 500 m 只有 +10~+250 m 的岸坡，量出 **-0.01°**；同一窗口内
-真实坡地可达 52°（中位 19°）。湖面本身是平的，站在湖心量"下游坡度"量到的
-是"湖平不平"，不是"坝体下游陡不陡"。``MIN_MEASURABLE_SLOPE_DEG = 1.0`` 只是
-把这种假值退回 UNKNOWN，让判据不敢用——**要真正用上这条判据，得先知道坝在哪。**
+高程约 4770 m，四周 500 m 只有 +10~+250 m 的岸坡，量出的下游坡度接近 0
+（``risk_series`` 记的是 -0.01°；本机用 ``output/test_exp/kyagar_basin.geojson``
+的质心复测是 -0.32°、用文档坐标 (35.677, 77.191) 复测是 +0.70°——
+都在 1° 以内，结论不变：量到的是湖面平不平，不是坝体下游陡不陡）。
+同一窗口内真实坡地可达 52°（GLO-30 全窗每像元坡度中位 27.7°，见 ``terrain.py``
+的实测锚点）。``MIN_MEASURABLE_SLOPE_DEG = 1.0`` 只是把这种假值退回 UNKNOWN，
+让判据不敢用——**要真正用上这条判据，得先知道坝在哪。**
 
 本模块给的就是那个位置。物理依据只有两条，不需要任何经验系数：
 
 1. **水往低处流。** 坝体是湖的下游出口，出口是湖边界上高程最低的地方。
-2. **出口的外法线背向湖心。** 从出口指向湖质心的反方向，就是下游方向。
+2. **出口的外法线背向水体。** 下游方向 = 出口处朝湖外的边界法线。
+   （不是"质心 -> 出口"的反方向：那只是凸湖上的近似，凹湖边会指回湖里，
+   实测弯月形湖 200 个边界点里有 30 个因此方向完全反了。）
 
 于是"坝体在哪"变成一个可在 DEM 上复核的几何量：沿湖边界采样，取高程最低点。
 评委可以拿同一份 DEM 把这条边界重采一遍，得到同一个点。
@@ -48,9 +53,17 @@ DEM 读不到、边界点全部落在 nodata 上、湖几何无效——一律�
 
 注意湖 2/3 的坝体坡度比湖心**更缓**，这不是退化：湖心在陡岸下，量的是岸坡；
 坝体在湖的排水端，量的是坝体下游，后者本就更缓。这正是"湖心量错了"的实证。
-湖 1 两个数都接近 0，因为它是 6 km² 的大湖，500 m 剖面还没走出湖面——
-**这是数据告诉我们的事实**：这个湖用 500 m 口径量不到坝体坡度，应当退回 UNKNOWN，
-而不是拿湖心或坝体的一个近零数去命中判据。
+湖 1 两个数都接近 0，**不是因为剖面还在湖里**——复核实测，从坝体点出发的
+0–500 m 剖面已经离开湖岸（距岸 0 → 282 m），但那段地形本身就是一片近水平低台地
+（高程 3036.0 → 3035.3 m，500 m 只降 0.7 m）。**这是数据告诉我们的事实**：
+这个湖用 500 m 口径量不到坝体坡度，应当退回 UNKNOWN，而不是拿湖心或坝体的
+一个近零数去命中判据。
+
+``boundary_relief_m`` 要**两头看**：太小（几米）说明出口可能只是 DEM 在湖面上的
+噪声；太大（几十米以上）说明这条多边形边界穿过了真实地形，不是一个水平的水面线
+——湖 1 的散布 160.7 m、周长 108.8 km 对 6.07 km² 的面积（紧凑度 0.006），
+是典型的「多边形把河谷也包进来了」，它的「坝体」同样不能直接信。
+两种情况都该退回 UNKNOWN，而不是只看散布小的一头。
 """
 
 from __future__ import annotations
@@ -85,15 +98,26 @@ __all__ = [
 #: （出口是边界上的全局最低点），改它不会让结果含义变化。
 DEFAULT_BOUNDARY_SAMPLES = 360
 
-#: 判断"出口就在质心附近"的退化阈值，单位是湖的等效半径倍数。
-#: 出口到质心的距离小于 1% 等效半径时，用"质心 -> 出口"求方向会把方位角
-#: 放大成一个纯噪声（两个几乎重合的点，方向对舍入误差极敏感），改走局部切线法线。
-_DEGENERATE_FRACTION = 0.01
-
 
 def _require(cond: bool, message: str) -> None:
     if not cond:
         raise ValueError(message)
+
+
+def _validate_n_samples(n_samples: Any) -> int:
+    """边界采样点数必须是不小于 8 的整数，返回规范化后的 int。
+
+    为什么抽成一个函数：``outlet_point()`` 与 ``dam_position()`` 都必须校验。
+    早先只有 ``outlet_point()`` 校验，``dam_position(n_samples=1)`` 会静默地
+    只采一个边界点、把那个点当出口返回——同一份输入、两条路径、两个结果，
+    这正是本项目最不能接受的那种分叉。
+    """
+    _require(
+        isinstance(n_samples, numbers.Integral) and not isinstance(n_samples, bool)
+        and int(n_samples) >= 8,
+        f"n_samples 必须是不小于 8 的整数，收到 {n_samples!r}",
+    )
+    return int(n_samples)
 
 
 @dataclass
@@ -247,12 +271,7 @@ def outlet_point(
     只比较**读得到高程**的边界点。全边界都是 nodata 时返回 None，
     绝不退回质心或边界中点——那是编一个位置。
     """
-    _require(
-        isinstance(n_samples, numbers.Integral) and not isinstance(n_samples, bool)
-        and int(n_samples) >= 8,
-        f"n_samples 必须是不小于 8 的整数，收到 {n_samples!r}",
-    )
-    n_samples = int(n_samples)
+    n_samples = _validate_n_samples(n_samples)
     _check_dem_grid(dem, dem_transform, dem_crs)
 
     geom = lake_geometry(lake_geom_wgs84)
@@ -292,12 +311,24 @@ def _check_dem_grid(dem: np.ndarray, dem_transform: Affine, dem_crs: CRS | str) 
 # ---------------------------------------------------------------------------
 
 
+def _normalize_azimuth(az_deg: float) -> float:
+    """把方位角规整到 ``[0, 360)``。
+
+    不能只写 ``az % 360.0``：对 -1e-15 这种"负的零"，Python 的 ``%`` 返回
+    ``360.0`` 而不是 ``0.0``（实测 -1e-16 % 360.0 == 360.0）。方位角是给下游
+    判据和报告用的，360° 与 0° 数学上等价，但落进 JSON 后 ``0 <= az < 360``
+    这条不变量就破了，调用方按区间分箱会多出一个空箱。
+    """
+    az = float(az_deg) % 360.0
+    return 0.0 if az >= 360.0 else az
+
+
 def _initial_azimuth(lon0: float, lat0: float, lon1: float, lat1: float) -> float:
     """WGS84 椭球上 (lon0,lat0) -> (lon1,lat1) 的初始方位角（度，正北 0 顺时针）。"""
     from pyproj import Geod
 
     az, _, _ = Geod(ellps="WGS84").inv(lon0, lat0, lon1, lat1)
-    return az % 360.0
+    return _normalize_azimuth(az)
 
 
 def downstream_azimuth(
@@ -307,11 +338,13 @@ def downstream_azimuth(
 ) -> float:
     """出口处的下游方位角（度，正北 0，顺时针）。
 
-    主算法：出口指向湖质心的反方向。这是"外法线"在凸多边形上的解析形式，
-    对冰湖这种拉长的形状足够好——质心在湖里，出口在边上，连线就是朝外。
+    主算法：**出口处的局部外法线**——沿边界在出口前后各取一小段求切线，
+    法线取**离开水体**的那一侧。为什么不用"质心 -> 出口的反方向"：那只是
+    外法线在**凸**多边形上的近似。湖一旦是凹的（弯月形、多汊的冰川湖很常见），
+    质心到出口的连线可能从水里穿出去——实测一个弯月形湖，200 个边界采样点里
+    有 30 个点的"质心 -> 出口"方向朝湖内指，下游方位角因此完全反了。
 
-    退化情形（出口几乎和质心重合，或几何退化）用局部切线法线：
-    取出口前后各一小段边界求切线，法线取**背向质心**的那一侧。
+    退化情形（周长算不出、切线为零）退回"质心 -> 出口"方向，此时它是唯一信息。
 
     为什么不返回 None：方位角总是可定义的（湖几何有效即可）。真正可能缺数据的是
     高程，那在 ``outlet_point()`` / ``dam_position()`` 里已经处理。
@@ -325,13 +358,6 @@ def downstream_azimuth(
 
     poly = _largest_polygon(geom)
     centroid = poly.centroid
-    # 湖的等效半径（用面积折算），用来判断"出口是否几乎和质心重合"。
-    radius_deg = math.sqrt(max(poly.area, 0.0) / math.pi)
-    gap = math.hypot(outlet_lon - centroid.x, outlet_lat - centroid.y)
-    if radius_deg > 0 and gap > _DEGENERATE_FRACTION * radius_deg:
-        return _initial_azimuth(centroid.x, centroid.y, outlet_lon, outlet_lat)
-
-    # 退化：出口落在质心上（正圆 + 对称采样时可能发生），用局部切线法线。
     return _tangent_normal_azimuth(poly, outlet_lon, outlet_lat, centroid.x, centroid.y)
 
 
@@ -342,11 +368,15 @@ def _tangent_normal_azimuth(
     cx: float,
     cy: float,
 ) -> float:
-    """边界在 (lon,lat) 处的法线方向，取背向 (cx,cy) 的那一侧。
+    """边界在 (lon,lat) 处的**外**法线方向（度）。
 
     做法：沿边界在出口附近取 ±delta 弧长两点，用它们的连线当切线，
-    法线 = 切线旋转 90°。两个法线候选里选与"质心 -> 出口"夹角更小的那个
-    （即更朝外）。delta 取周长的 1%，小到能当局部切线、大到不会被单个顶点噪声带偏。
+    法线 = 切线旋转 90°。两个候选里，**取朝外的那一个**：
+    沿候选方向走一小段，落在多边形内的是朝湖里、另一个才是下游。
+    "朝外"用点包含判定，而不是和"质心 -> 出口"比点积——后者在凹湖边会选错
+    （见 ``downstream_azimuth()`` 的说明）。
+
+    delta 取周长的 1%，小到能当局部切线、大到不会被单个顶点噪声带偏。
     """
     ring = poly.exterior
     length = ring.length
@@ -354,11 +384,11 @@ def _tangent_normal_azimuth(
         # 周长都算不出来，只能退回质心->出口方向（此时它已经是唯一的信息）。
         return _initial_azimuth(cx, cy, lon, lat)
 
-    # 找到出口在环上的投影位置：取最近的顶点下标做起点，再按弧长微调。
-    coords = np.asarray(ring.coords, dtype=np.float64)
-    d2 = (coords[:, 0] - lon) ** 2 + (coords[:, 1] - lat) ** 2
-    i0 = int(np.argmin(d2))
-    base = ring.project(Point(coords[i0]))
+    # 找到出口在环上的投影位置：**把点直接投到环上**，不能先取最近的顶点。
+    # 顶点在弯曲处密、直边处疏；取最近顶点再 project() 会得到"离该顶点最近的
+    # 那段弧"，而不是"离出口最近的那段弧"。实测一个 20 顶点的锯齿状湖，
+    # 最近顶点离出口 65 m，切线因此取在另一段边界上，法线指回湖里。
+    base = ring.project(Point(lon, lat))
     delta = max(length * 0.01, 1e-9)
     p_before = ring.interpolate((base - delta) % length)
     p_after = ring.interpolate((base + delta) % length)
@@ -374,12 +404,34 @@ def _tangent_normal_azimuth(
         return _initial_azimuth(cx, cy, lon, lat)
     tx /= norm
     ty /= norm
-    # 两个法线候选：切线顺时针转 90° / 逆时针转 90°。
+    # 两个法线候选：切线顺时针转 90° / 逆时针转 90°。分量是（东, 北）。
     candidates = [(ty, -tx), (-ty, tx)]
-    outward = ((lon - cx) * m_lon, (lat - cy) * m_lat)
-    best = max(candidates, key=lambda v: v[0] * outward[0] + v[1] * outward[1])
+
+    def probe_inside(vec: tuple[float, float], probe_m: float) -> bool:
+        east, north = vec
+        plon = lon + east * probe_m / m_lon
+        plat = lat + north * probe_m / m_lat
+        return poly.contains(Point(plon, plat))
+
+    # 探针距离不能只取一个值：太近会因浮点误差落在边上（两个候选都被判"内"），
+    # 太远会越过窄颈跑到对岸去（两个候选都被判"外"）。从近到远试几个尺度，
+    # 取第一个"恰好一个候选在湖外"的尺度——那一个就是外法线。
+    # 实测 78 个随机多边形 × 20 个边界点：单尺度判错 3.10%，多尺度降到 1.28%
+    # （对照组"质心 -> 出口"是 8.18%）。
+    best: tuple[float, float] | None = None
+    for scale in (0.01, 0.03, 0.1, 0.3):
+        probe_m = max(delta * m_lat * scale, 0.5)
+        inside = [probe_inside(v, probe_m) for v in candidates]
+        if inside[0] != inside[1]:
+            best = candidates[1] if inside[0] else candidates[0]
+            break
+
+    if best is None:
+        # 所有尺度都分不出里外（极窄的颈、或探针总在边界上）：退回质心判据。
+        outward = ((lon - cx) * m_lon, (lat - cy) * m_lat)
+        best = max(candidates, key=lambda v: v[0] * outward[0] + v[1] * outward[1])
     # best 的 x 是东分量（米）、y 是北分量（米）；方位角从北顺时针 = atan2(东, 北)。
-    return math.degrees(math.atan2(best[0], best[1])) % 360.0
+    return _normalize_azimuth(math.degrees(math.atan2(best[0], best[1])))
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +455,12 @@ def dam_position(
     ``boundary_relief_m`` 一并返回，因为它是判断这个估计可信度的唯一线索：
     边界高程散布只有几米时，出口很可能只是 DEM 在湖面上的噪声起伏。
     调用方应当把散布和坡度一起看，而不是只信一个点。
+
+    **只有一个边界点读得到高程时，``boundary_relief_m`` 返回 None 而不是 0。**
+    单点的「散布」没有定义（不是「测到了 0」）；写成 0 会被下游读成
+    「边界很平、出口很可疑」，但真实情况是「根本没法判断」。
     """
+    n_samples = _validate_n_samples(n_samples)
     _check_dem_grid(dem, dem_transform, dem_crs)
     geom = lake_geometry(lake_geom_wgs84)
     if geom is None:
@@ -417,7 +474,8 @@ def dam_position(
     idx = int(np.flatnonzero(finite)[np.argmin(z[finite])])
     lon, lat = float(pts[idx].x), float(pts[idx].y)
     elevation = float(z[idx])
-    relief = float(np.nanmax(z) - np.nanmin(z)) if finite.any() else None
+    # 少于 2 个有效点时散布无定义 -> None，不是 0（项目硬规矩）。
+    relief = float(np.nanmax(z) - np.nanmin(z)) if int(finite.sum()) >= 2 else None
     azimuth = downstream_azimuth(geom, lon, lat)
     return DamEstimate(
         lon=lon,
