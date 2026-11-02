@@ -130,6 +130,18 @@ def main() -> int:
     check("起始目录真实存在", start_path is not None and start_path.is_dir(),
           str(start_path))
 
+    # 直接看 URL 本身，不要只比对 resolve() 之后的结果。
+    # 实跑时抓到过：fromLocalFile("data/kyagar") 生成畸形的 file:data/kyagar，
+    # Windows 原生对话框报 SHCreateItemFromParsingName failed，起始目录失效。
+    # 而 toLocalFile() 之后再 resolve() 是能把相对路径补全的，所以只比对
+    # 解析结果会漏掉这个 bug（本断言就是为堵这条漏而加的）。
+    raw_url = start.toString() if isinstance(start, QUrl) else ""
+    check("起始目录 URL 是绝对 file:// 形式",
+          raw_url.startswith("file:///"), raw_url)
+    check("起始目录 URL 不含相对路径片段（file:data/... 是畸形 URL）",
+          "file:data/" not in raw_url and not raw_url.startswith("file:data"),
+          raw_url)
+
     # ---- 2) QUrl -> 本地路径转换 ----
     print("== 步骤 2 / QUrl 转本地路径 ==", flush=True)
     # 用临时目录造真实文件名，覆盖三种会让 naive 写法出错的情况：

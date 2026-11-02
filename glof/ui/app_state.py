@@ -447,10 +447,16 @@ class AppState(QObject):
 
         返回 QUrl 而不是 str：目录名里可能有中文或空格，拼 "file:///" 字符串
         要自己处理百分号转义，漏一个就打开失败。QUrl.fromLocalFile 负责编码。
+
+        必须先 resolve() 成绝对路径再转 URL。``QUrl.fromLocalFile("data/kyagar")``
+        会生成 ``file:data/kyagar``——这不是合法 file URL，Windows 原生对话框
+        拿到后报 ``SHCreateItemFromParsingName(file:data/kyagar) failed``，
+        起始目录直接失效（实跑 2026-11-03 抓到）。默认影像是相对路径
+        ``data/kyagar/xxx.tif``，所以这条分支是常态，不是边缘情况。
         """
         resolved = self._resolve_input_path(self._default_input)
         folder = resolved.parent if resolved is not None else PROJECT_ROOT
-        return QUrl.fromLocalFile(str(folder))
+        return QUrl.fromLocalFile(str(Path(folder).resolve()))
 
     @Slot()
     def cancelSeries(self) -> None:
