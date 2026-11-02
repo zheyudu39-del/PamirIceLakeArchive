@@ -191,6 +191,7 @@ class SeriesWorker(QThread):
         end_md: str = "09-15",
         max_cloud: float = 60.0,
         per_year_limit: int = 60,
+        ref_resolution: float | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -200,6 +201,8 @@ class SeriesWorker(QThread):
         self._end_md = str(end_md)
         self._max_cloud = float(max_cloud)
         self._per_year_limit = int(per_year_limit)
+        # None = 10 m 原生（正式口径）；20 = 快速预览，面积偏差中位 11.6%
+        self._ref_resolution = None if ref_resolution is None else float(ref_resolution)
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -225,6 +228,7 @@ class SeriesWorker(QThread):
                 end_md=self._end_md,
                 max_cloud=self._max_cloud,
                 per_year_limit=self._per_year_limit,
+                ref_resolution=self._ref_resolution,
                 progress=on_progress,
             )
         except _Cancelled:

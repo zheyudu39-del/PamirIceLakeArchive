@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import time
 import json
 import sys
 import unicodedata
@@ -286,6 +287,73 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         manifest.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n清单      : {manifest}")
         print(f"下一步    : python -m glof.cli extract --input {saved[0]['file']} --out output/real1")
+    return 0
+
+
+def cmd_series(args: argparse.Namespace) -> int:
+    """逐年检索 Sentinel-2，输出每个日期的湖泊面积序列。
+
+    这个子命令原先只在界面里有入口，命令行没有。补上是为了：
+    * 能在没有显示器的机器上跑（答辩现场、服务器）；
+    * 能对着秒表验证优化效果（``--fast`` 前后差多少）；
+    * 结果落成 CSV，之后 ``glof risk`` 直接吃，不必再联网。
+
+    ``--fast`` 用 20 m 读，只适合看趋势。**不要把它写进报告**——
+    实测面积与 10 m 相差中位 11.6%、最大 30.5%，而风险判据看的就是面积
+    与平台值的比值，这个量级的偏差足以翻转等级。
+    """
+    from .core import timeseries as gts
+
+    t0 = time.perf_counter()
+
+    def progress(msg: str) -> None:
+        print(f"  {msg}", file=sys.stderr)
+
+    res = 20.0 if args.fast else None
+    if args.fast:
+        print("快速模式：20 m 读取。面积偏差中位 11.6%，不要写进报告。",
+              file=sys.stderr)
+
+    points = gts.build_series(
+        [float(v) for v in args.bbox],
+        range(args.year0, args.year1 + 1),
+        start_md=args.start_md,
+        end_md=args.end_md,
+        max_cloud=args.max_cloud,
+        per_year_limit=args.per_year_limit,
+        progress=progress,
+        ref_resolution=res,
+    )
+    elapsed = time.perf_counter() - t0
+
+    if not points:
+        print("没有取到任何观测点。检查 bbox / 年份 / 云量上限。", file=sys.stderr)
+        return 1
+
+    print(f"\n  {'日期':<12} {'面积 km²':>10} {'有效像元':>10} "
+          f"{'有效占比':>8} {'NDWI max':>9}  瓦片")
+    print("  " + "-" * 62)
+    for p in points:
+        print(f"  {p.date:<12} {p.area_km2:10.4f} {p.valid_px:10d} "
+              f"{p.valid_frac:8.1%} {p.ndwi_max:9.3f}  {p.tile}")
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = out_dir / "series.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["date", "area_km2", "valid_px", "valid_frac",
+                    "tile", "cloud", "scene", "ndwi_max", "water_frac"])
+        for p in points:
+            w.writerow([p.date, f"{p.area_km2:.6f}", p.valid_px,
+                        f"{p.valid_frac:.4f}", p.tile, f"{p.cloud:.4f}",
+                        p.scene, f"{p.ndwi_max:.4f}", f"{p.water_frac:.6f}"])
+
+    print()
+    print(f"共 {len(points)} 期，耗时 {elapsed:.1f} s"
+          f"{'（快速模式 20 m）' if args.fast else '（10 m 原生）'}")
+    print(f"输出      : {csv_path}")
+    print(f"下一步    : glof risk --input {csv_path} --lake-type ice")
     return 0
 
 
@@ -1190,6 +1258,28 @@ def build_parser() -> argparse.ArgumentParser:
                        help="关闭冰雪掩膜（做消融对比用，不要用于正式报告）")
     p_acc.add_argument("--out", default="output/eval", help="输出目录")
     p_acc.set_defaults(func=cmd_accuracy)
+
+    p_ser = sub.add_parser(
+        "series",
+        help="逐年检索 Sentinel-2，输出每个日期的湖泊面积序列（联网，分钟级）",
+    )
+    p_ser.add_argument("--bbox", nargs=4, type=float, required=True,
+                       metavar=("LON_MIN", "LAT_MIN", "LON_MAX", "LAT_MAX"),
+                       help="研究区范围（WGS84）")
+    p_ser.add_argument("--year0", type=int, required=True, help="起始年")
+    p_ser.add_argument("--year1", type=int, required=True, help="结束年（含）")
+    p_ser.add_argument("--start-md", default="06-01",
+                       help="年内起始 MM-DD，默认 06-01（帕米尔只做消融期）")
+    p_ser.add_argument("--end-md", default="09-15", help="年内结束 MM-DD，默认 09-15")
+    p_ser.add_argument("--max-cloud", type=float, default=60.0,
+                       help="整景云量上限（%%），默认 60。只是粗筛，不参与选景")
+    p_ser.add_argument("--per-year-limit", type=int, default=60,
+                       help="每年最多取几景，默认 60")
+    p_ser.add_argument("--fast", action="store_true",
+                       help="快速模式：20 m 读取，约快 1.5 倍。**面积偏差中位 11.6%%、"
+                            "最大 30.5%%，只能看趋势，不要写进报告**")
+    p_ser.add_argument("--out", default="output/series", help="输出目录")
+    p_ser.set_defaults(func=cmd_series)
 
     p_exp = sub.add_parser(
         "exposure",

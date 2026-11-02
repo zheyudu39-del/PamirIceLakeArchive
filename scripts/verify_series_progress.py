@@ -76,6 +76,9 @@ class _Stub:
     def __init__(self, dates_per_year: dict[int, list[str]]) -> None:
         self.dates = dates_per_year
         self.measure_calls = 0
+        #: 设置后 search 直接返回这批 ref，不再按日期造。
+        #: 几何预筛测试要用它塞进"完整覆盖"和"窄条"两景。
+        self._refs_override = None
 
     def install(self) -> "_Stub":
         self._orig = (gstac.search_sentinel2, gstac.sign_scene, gio.load_scene)
@@ -83,6 +86,8 @@ class _Stub:
         self._stub = self
 
         def search(bbox, start, end, **kw):
+            if self._stub._refs_override is not None:
+                return list(self._stub._refs_override)
             year = int(start[:4])
             return [_ref(d) for d in self._stub.dates.get(year, [])]
 
@@ -115,9 +120,11 @@ def test_progress_on_success():
     check("三个日期都提出来了", len(points) == 3, f"{len(points)} 点")
     check("progress 被调用过（原先只在失败时调）", len(msgs) > 0, f"{len(msgs)} 条")
 
-    # 每个日期至少一条，才能保证"读完一景就有一个中断点"
-    date_msgs = [m for m in msgs if "读取中" in m]
-    check("每个日期都报了一次", len(date_msgs) >= 3, f"{len(date_msgs)} 条读取中")
+    # 每个日期至少一条，才能保证"读完一景就有一个中断点"。
+    # 并发改造后措辞从"读取中"改成"已读取"——进度在**完成时**回调，
+    # 因为并发下"开始"的先后没有意义（6 个日期同时开始）。
+    date_msgs = [m for m in msgs if "已读取" in m]
+    check("每个日期都报了一次", len(date_msgs) >= 3, f"{len(date_msgs)} 条已读取")
 
     check("年份进度带序号", any("[1/1]" in m for m in msgs),
           next((m for m in msgs if "[" in m), ""))
@@ -144,21 +151,29 @@ def test_progress_multi_year():
 
 
 def test_cancel_via_progress():
-    """取消的标志位必须在下一个回调点被看到。"""
-    print("\n[3] 取消在下一个回调点生效")
+    """取消的标志位必须在下一个回调点被看到。
+
+    并发改造后取消粒度变粗了，这是**真实取舍**，测试如实反映：
+    一整年的日期会同时发出去（最多 6 路），已经在飞的请求不会被打断，
+    中断发生在下一个完成的日期触发回调时。所以断言从"读完全部日期之前"
+    放宽成"不是全部读完才停"——串行时能精确到"第 2 景"，并发时做不到，
+    但"点了取消不会等整年跑完"这条仍然成立。
+    """
+    print("\n[3] 取消在下一个回调点生效（并发下粒度变粗）")
 
     class _Cancelled(Exception):
         pass
 
-    stub = _Stub({2024: ["2024-07-05", "2024-07-20", "2024-08-01"]}).install()
+    dates = [f"2024-07-{d:02d}" for d in range(1, 13)]  # 12 个日期
+    stub = _Stub({2024: dates}).install()
     state = {"cancel": False, "seen": 0}
 
     def on_progress(msg: str) -> None:
         if state["cancel"]:
             raise _Cancelled()
         state["seen"] += 1
-        # 读第二景前请求取消
-        if state["seen"] == 3:
+        # 完成第 2 个日期时请求取消
+        if state["seen"] == 2:
             state["cancel"] = True
 
     raised = False
@@ -170,8 +185,11 @@ def test_cancel_via_progress():
         stub.restore()
 
     check("取消真的中断了检索", raised, f"回调 {state['seen']} 次")
-    check("取消发生在读完全部日期之前", stub.measure_calls < 3,
-          f"只读了 {stub.measure_calls} 景")
+    # 并发度 6：取消时最多还有 6 个在飞，但不会把 12 个全跑完
+    check("取消发生在读完全部日期之前", stub.measure_calls < len(dates),
+          f"读了 {stub.measure_calls}/{len(dates)} 景")
+    check("并发确实铺开了（不是一次只跑一个）", stub.measure_calls > 2,
+          f"{stub.measure_calls} 景已发出")
 
 
 def test_no_progress_callback():
@@ -185,6 +203,78 @@ def test_no_progress_callback():
     check("两个日期两点", len(points) == 2, f"{len(points)}")
 
 
+
+def test_geometric_prefilter():
+    """双瓦片日期只读主景，且回退路径可用。"""
+    print("\n[5] 几何预筛：双瓦片日期只读主景")
+    from glof.core.stac import SceneRef
+
+    # 造两景：一景完整覆盖，一景只覆盖一条边（模拟 T43SFV vs T43SGV）
+    full = SceneRef(
+        id="S2B_MSIL2A_20240701T000000_R000_T43SFV_x",
+        datetime="2024-07-01T05:00:00Z", cloud_cover=5.0,
+        bbox=(77.10, 35.60, 77.30, 35.75),  # 完全包住 BBOX
+        assets={}, platform="pc",
+    )
+    narrow = SceneRef(
+        id="S2B_MSIL2A_20240701T000000_R000_T43SGV_x",
+        datetime="2024-07-01T05:00:00Z", cloud_cover=0.1,  # 云量更低
+        bbox=(77.20, 35.60, 77.30, 35.75),  # 只擦到东边一条
+        assets={}, platform="pc",
+    )
+
+    cov_full = gts._geometric_coverage(full, BBOX)
+    cov_narrow = gts._geometric_coverage(narrow, BBOX)
+    check("完整覆盖的景算作 1.0", abs(cov_full - 1.0) < 1e-9, f"{cov_full:.3f}")
+    check("窄条的覆盖比明显更低", cov_narrow < 0.5, f"{cov_narrow:.3f}")
+
+    ranked = gts._rank_by_geometric_coverage([narrow, full], BBOX)
+    check("按覆盖排序：完整的在前（尽管窄条云量更低）",
+          ranked[0] is full, ranked[0].tile)
+
+    # 端到端：这个日期只应读 1 景（完整的那景），不读窄条
+    stub = _Stub({2024: ["2024-07-01"]}).install()
+    stub._refs_override = [narrow, full]
+    msgs = []
+    try:
+        pts = gts.build_series(BBOX, [2024], progress=msgs.append)
+    finally:
+        stub.restore()
+    check("双瓦片日期只读了一景", stub.measure_calls == 1,
+          f"读了 {stub.measure_calls} 景")
+    check("取到一期结果", len(pts) == 1, f"{len(pts)} 点")
+
+
+def test_rate_limit_retry():
+    """429 必须重试，不能把瞬时失败留成序列空洞。"""
+    print("\n[6] 限流重试")
+    check("识别 429", gts._is_rate_limited(Exception("HTTP Error 429: Too Many Requests")))
+    check("识别连接重置", gts._is_rate_limited(Exception("Connection was reset")))
+    check("不把缺资产当限流", not gts._is_rate_limited(KeyError("B11")))
+    check("不把越界当限流", not gts._is_rate_limited(ValueError("bounds 完全落在影像范围之外")))
+
+    # 端到端：第一次 429、第二次成功 -> 必须拿到结果
+    import glof.core.timeseries as T
+    calls = {"n": 0}
+    orig = T._measure_once
+
+    def flaky(ref, bbox, res=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("HTTP Error 429: Too Many Requests")
+        return orig(ref, bbox, res)
+
+    stub = _Stub({2024: ["2024-07-01"]}).install()
+    T._measure_once = flaky
+    try:
+        pts = T.build_series(BBOX, [2024])
+    finally:
+        T._measure_once = orig
+        stub.restore()
+    check("429 后重试成功", len(pts) == 1, f"{len(pts)} 点，尝试 {calls['n']} 次")
+    check("确实重试了", calls["n"] == 2, f"{calls['n']} 次")
+
+
 def main() -> int:
     print("=" * 70)
     print("时序检索进度与取消验证（离线）")
@@ -194,6 +284,8 @@ def main() -> int:
     test_progress_multi_year()
     test_cancel_via_progress()
     test_no_progress_callback()
+    test_geometric_prefilter()
+    test_rate_limit_retry()
 
     print("\n" + "=" * 70)
     if FAILURES:
