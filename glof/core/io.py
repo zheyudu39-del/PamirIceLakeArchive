@@ -50,6 +50,7 @@ __all__ = [
     "save_stack",
     "describe_raster",
     "save_geojson",
+    "load_lakes_geojson",
     "save_csv",
 ]
 
@@ -475,6 +476,52 @@ def save_geojson(records: Iterable[Any], path: str | Path) -> Path:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def load_lakes_geojson(path: str | Path) -> list:
+    """读回 ``save_geojson()`` 写出的湖泊 GeoJSON，返回 ``LakeRecord`` 列表。
+
+    对称操作。存在的理由很实际：``exposure`` / ``report`` 这些下游命令
+    应该能吃上一次提取的结果，而不是每件事都重新读一遍影像——重读一景
+    联网要 9–30 秒，而结果早就落盘了。
+
+    缺字段时的默认值刻意取"没量到"那一侧：
+    ``area_km2`` 缺失 -> ``area_m2 = nan``（不是 0），``risk_level`` 缺失
+    -> ``"UNKNOWN"``（不是 ``"LOW"``）。这与全项目「缺数据返回 None」一致。
+    """
+    from .water import LakeRecord
+
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    features = doc.get("features", []) if isinstance(doc, dict) else []
+    out: list[LakeRecord] = []
+    for idx, feat in enumerate(features, start=1):
+        props = feat.get("properties") or {}
+        geom = feat.get("geometry")
+        if not geom:
+            # 没有几何的记录无法画图，但面积/质心可能仍有意义；
+            # 保留它并让 geometry 为空串，由下游决定要不要跳过。
+            geom_json = ""
+        else:
+            geom_json = json.dumps(geom)
+        area_km2 = props.get("area_km2")
+        area_m2 = float("nan") if area_km2 is None else float(area_km2) * 1e6
+        perim_km = props.get("perimeter_km")
+        out.append(
+            LakeRecord(
+                lake_id=int(props.get("lake_id", idx)),
+                area_m2=area_m2,
+                perimeter_m=float("nan") if perim_km is None else float(perim_km) * 1000.0,
+                n_pixels=int(props.get("n_pixels", 0)),
+                area_px_m2=area_m2,
+                mean_ndwi=float(props.get("mean_ndwi", float("nan"))),
+                centroid_lon=float(props.get("centroid_lon", float("nan"))),
+                centroid_lat=float(props.get("centroid_lat", float("nan"))),
+                geometry_wgs84_json=geom_json,
+                risk_level=str(props.get("risk_level", "UNKNOWN")),
+                risk_reasons=list(props.get("risk_reasons") or []),
+            )
+        )
     return out
 
 

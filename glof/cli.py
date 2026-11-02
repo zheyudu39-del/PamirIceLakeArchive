@@ -509,12 +509,73 @@ def cmd_risk(args: argparse.Namespace) -> int:
     # --dem 给了就从 DEM 量坝体下游坡度，覆盖 --slope-deg。
     # 量不出来（None）时保留原值——若原值也是 None，判据照旧走 UNKNOWN。
     slope = args.slope_deg
-    if args.dem and (args.dem_lat is None or args.dem_lon is None):
-        print("错误：--dem 必须配 --dem-lat 与 --dem-lon（坝体位置）。", file=sys.stderr)
+    dem_lat, dem_lon = args.dem_lat, args.dem_lon
+
+    # --dam-position：从湖边界最低点自动估坝体，替掉"拿湖心当坝体"。
+    # 湖心是错的——实测克亚吉尔湖心四周 500 m 只有 +10~+250 m 岸坡，
+    # 量出 -0.01°；真实坡地可达 52°。坝体在湖的下游出口，不在几何中心。
+    if args.dam_position:
+        if not args.dem:
+            print("错误：--dam-position 需要 --dem。", file=sys.stderr)
+            return 2
+        if not args.lakes:
+            print("错误：--dam-position 需要 --lakes（湖泊 GeoJSON，"
+                  "坝体是从湖边界几何估的）。", file=sys.stderr)
+            return 2
+        from .core import dam_position as gdam
+        from .core import terrain as gterr
+
+        records = gio.load_lakes_geojson(args.lakes)
+        if not records:
+            print(f"{args.lakes} 里没有湖泊，无法估坝体位置。", file=sys.stderr)
+            return 2
+        # 取面积最大的那个湖估坝体——风险判定针对主湖
+        main = max(records, key=lambda r: (r.area_m2 if r.area_m2 == r.area_m2 else -1))
+        # 主湖面积和时序里的最大面积差太多，说明 --lakes 拿错了景/窗口。
+        # 这不是小概率：--lakes 若是另一个 bbox 的提取结果，坝体会被估到
+        # 另一个湖的出口，坡度判据整个失去意义。宁可报错也不要静默算下去。
+        series_max = max((p.area_km2 for p in points if p.area_km2 == p.area_km2),
+                         default=None)
+        main_km2 = main.area_m2 / 1e6 if main.area_m2 == main.area_m2 else None
+        if series_max and main_km2 and (main_km2 < series_max * 0.2 or main_km2 > series_max * 5):
+            print(f"错误：--lakes 里的主湖 {main_km2:.4f} km² 与面积时序的最大值 "
+                  f"{series_max:.4f} km² 差了一个量级。", file=sys.stderr)
+            print(f"  这多半是 --lakes 用了另一景/另一个 bbox 的提取结果。"
+                  f"坝体会被估到别的湖出口，坡度判据就失去意义了。", file=sys.stderr)
+            return 2
+        bbox = (main.centroid_lon - 0.05, main.centroid_lat - 0.05,
+                main.centroid_lon + 0.05, main.centroid_lat + 0.05)
+        try:
+            dem_arr, dem_tr = gterr.read_dem_bounds(args.dem, bbox)
+        except Exception as exc:  # noqa: BLE001 - 读不到 DEM 就退回手工坐标
+            print(f"DEM       : 读不到 {Path(args.dem).name}（{type(exc).__name__}），"
+                  f"无法自动估坝体", file=sys.stderr)
+            return 2
+        est = gdam.dam_position(
+            main.geometry_wgs84_json, dem_arr, dem_tr, "EPSG:4326")
+        if est is None:
+            print(f"坝体位置  : 估不出来（DEM 无有效高程），该判据保持 UNKNOWN",
+                  file=sys.stderr)
+        else:
+            print(f"坝体位置  : {est.lon:.5f}, {est.lat:.5f}"
+                  f"（边界最低点，高程 {est.elevation_m:.1f} m，"
+                  f"下游方位 {est.azimuth_deg:.0f}°，边界起伏 {est.boundary_relief_m:.0f} m）")
+            print(f"            湖心 {main.centroid_lon:.5f}, {main.centroid_lat:.5f}"
+                  f" 只作对照——坝体在出口，不在几何中心")
+            dem_lat, dem_lon = est.lat, est.lon
+            # 坝体位置已定，坡度直接用 dam_position 的采样，避免重复读 DEM
+            slope_from_dam = gterr.downstream_slope(dem_arr, dem_tr, est.lat, est.lon)
+            if slope_from_dam is not None:
+                slope = slope_from_dam
+                print(f"下游坡度  : {slope:.2f}°（坝体位置量得）")
+
+    if args.dem and not args.dam_position and (dem_lat is None or dem_lon is None):
+        print("错误：--dem 必须配 --dem-lat 与 --dem-lon（坝体位置），"
+              "或改用 --dam-position 自动估。", file=sys.stderr)
         return 2
-    if args.dem:
+    if args.dem and not args.dam_position:
         measured = grs.slope_from_dem(
-            args.dem, float(args.dem_lat), float(args.dem_lon))
+            args.dem, float(dem_lat), float(dem_lon))
         if measured is None:
             print(f"DEM       : {Path(args.dem).name} 取不到可量测的坝体下游坡度，"
                   f"该判据保持 UNKNOWN")
@@ -703,7 +764,16 @@ def cmd_accuracy(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     payload = {
+        # n_truth / n_covered 是报告模块算召回率分母用的。原先只写 n_windows，
+        # 报告拿不到分母就只能显示「没量到」——那是报告的诚实，但根源在 CLI
+        # 没把已有的数写全。这里补齐，让下游不必再猜。
+        "n_truth": len(windows) + len(missing),
+        "n_covered": len(windows),
         "n_windows": len(windows),
+        # 覆盖率 = 被覆盖点位 ÷ 真值总数。报告要它，缺了会显示「没量到」。
+        "coverage_rate": round(
+            len(windows) / (len(windows) + len(missing)), 4
+        ) if (len(windows) + len(missing)) else None,
         "n_missing_imagery": len(missing),
         "n_extract_failed": n_failed,
         "n_matched": n_matched,
@@ -792,6 +862,188 @@ def cmd_accuracy(args: argparse.Namespace) -> int:
         print("  结论：低召回率反映真值口径（历史事件点 ≠ 当前湖位），"
               "不是提取算法性能。")
         print("  要评价算法检出能力，需要用有人工标注面真值的数据集。")
+    return 0
+
+
+def cmd_exposure(args: argparse.Namespace) -> int:
+    """暴露度评估：算每个湖到最近道路 / 居民点的球面距离。
+
+    数据必须由调用方提供，本命令**不内置任何地理数据**。原因写在
+    ``core/exposure.py`` 里：OSM Overpass 2026-11-02 实测不可达
+    （overpass-api.de 返回 502，kumi.systems 超时）。编一份 G314 坐标
+    比缺数据危险得多——缺数据下游会走 UNKNOWN，编的坐标会被当真值用。
+
+    ``--settlements`` 不给时，居民点两个字段是 None（不是 False）：
+    False 表示"量到了且不在范围内"，None 才是"没数据"。
+    """
+    from .core import exposure as gexp
+    from .core.water import extract_lakes
+
+    if not Path(args.roads).exists():
+        print(f"道路文件不存在：{args.roads}", file=sys.stderr)
+        print("  暴露度需要外部矢量数据（GeoJSON）。本项目不内置地理数据，"
+              "原因见 glof/core/exposure.py 模块文档。", file=sys.stderr)
+        return 1
+    if not args.lakes and not args.input:
+        print("要给湖泊来源：--lakes <已有GeoJSON> 或 --input <影像>。", file=sys.stderr)
+        return 1
+    if args.lakes and not Path(args.lakes).exists():
+        print(f"湖泊文件不存在：{args.lakes}", file=sys.stderr)
+        return 1
+    if args.settlements and not Path(args.settlements).exists():
+        print(f"居民点文件不存在：{args.settlements}", file=sys.stderr)
+        return 1
+
+    # 先拿到湖泊：要么从已有 GeoJSON 读，要么现场提取
+    if args.lakes:
+        records = gio.load_lakes_geojson(args.lakes)
+    elif args.input:
+        scene = gio.load_scene(args.input, BAND_PRESETS[args.preset])
+        n = ndwi(scene["green"], scene["nir"])
+        snow = masks.snow_mask(ndsi(scene["green"], scene["swir1"]), scene["nir"]) \
+            if scene.has("swir1") else None
+        records = extract_lakes(
+            n, scene.transform, scene.crs,
+            threshold=args.threshold, min_area_km2=args.min_area_km2, exclude=snow,
+        )
+
+    if not records:
+        print("没有可评估的湖泊（提取到 0 条）。这不是「没有风险」，是没有水体。",
+              file=sys.stderr)
+        return 1
+
+    roads = gexp.load_features(args.roads)
+    settlements = gexp.load_features(args.settlements) if args.settlements else None
+    out = gexp.assess_exposure(
+        records, roads_path=args.roads,
+        settlements_path=args.settlements, buffer_km=args.buffer_km,
+    )
+
+    print(f"道路要素  : {len(roads)}")
+    print(f"居民点    : {'未提供（相关字段为 None，不是 False）' if settlements is None else len(settlements)}")
+    print(f"缓冲距离  : {args.buffer_km} km")
+    print()
+    print(f"  {'编号':>4}  {'道路 km':>9}  {'在缓冲内':>8}  {'居民点 km':>10}  {'在缓冲内':>8}")
+    for rec in out:
+        road = "没量到" if rec.road_distance_km is None else f"{rec.road_distance_km:.3f}"
+        sett = "没量到" if rec.settlement_distance_km is None else f"{rec.settlement_distance_km:.3f}"
+        rin = "未判定" if rec.in_road_buffer is None else ("是" if rec.in_road_buffer else "否")
+        sin = "未判定" if rec.in_settlement_buffer is None else ("是" if rec.in_settlement_buffer else "否")
+        print(f"  {rec.lake_id:>4}  {road:>9}  {rin:>8}  {sett:>10}  {sin:>8}")
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = [
+        {
+            "lake_id": r.lake_id,
+            "road_distance_km": None if r.road_distance_km is None else round(r.road_distance_km, 4),
+            "settlement_distance_km": None if r.settlement_distance_km is None else round(r.settlement_distance_km, 4),
+            "in_road_buffer": r.in_road_buffer,
+            "in_settlement_buffer": r.in_settlement_buffer,
+        }
+        for r in out
+    ]
+    (out_dir / "exposure.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print()
+    print(f"结果      : {out_dir / 'exposure.json'}")
+    print("注意：这是到道路/居民点的直线距离，不是洪水淹没范围。")
+    print("      真正的暴露度需要水动力模型，本指标只是可复算的筛查代理。")
+    return 0
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    """把已有产物汇总成一份报告（Markdown + 自包含 HTML）。
+
+    只读已落盘的结果，不重新计算——报告里的每个数都必须能追溯到
+    某个 JSON/CSV。缺文件就跳过该章节并在报告里写明，不编造。
+    """
+    from .core import report as grep_mod
+
+    sections = []
+    meta = {"数据来源": [], "口径": []}
+    # build_lake_report 返回的是**完整文档**（自带 # 标题、元信息、页脚），
+    # 而 build_accuracy_report / build_risk_report 返回的是**章节**
+    # （从 ## 开始，设计上塞进 ReportSection.body）。两者语义不同，不能
+    # 一视同仁地塞进 section，否则标题会套两层。湖泊清单走独立出口。
+    lake_doc: str | None = None
+
+    # 湖泊清单（可选：从 GeoJSON 或直接跑提取）
+    if args.lakes:
+        records = gio.load_lakes_geojson(args.lakes)
+        if records:
+            lake_doc = grep_mod.build_lake_report(
+                records, title=args.title,
+                meta={"数据来源": f"湖泊：{args.lakes}"},
+            )
+            meta["数据来源"].append(f"湖泊：{args.lakes}")
+
+    # 精度评价
+    acc_path = Path(args.accuracy) if args.accuracy else None
+    if acc_path and acc_path.exists():
+        payload = json.loads(acc_path.read_text(encoding="utf-8"))
+        # body 自带「## 精度评价（点位级，弱真值）」，section 不再另给 heading，
+        # 否则会渲染成「## 精度评价」下面又套一个「## 精度评价（…）」。
+        sections.append(grep_mod.ReportSection(
+            heading="",
+            body=grep_mod.build_accuracy_report(payload),
+        ))
+        meta["数据来源"].append(f"精度：{acc_path}")
+
+    # 风险分级
+    if args.risk:
+        risk_path = Path(args.risk)
+        if risk_path.exists():
+            payload = json.loads(risk_path.read_text(encoding="utf-8"))
+            rows = payload.get("periods") or payload.get("rows") or []
+            if rows:
+                sections.append(grep_mod.ReportSection(
+                    heading="",
+                    body=grep_mod.build_risk_report(rows, title="风险分级"),
+                ))
+                meta["数据来源"].append(f"风险：{risk_path}")
+
+    if lake_doc is None and not sections:
+        print("没有任何可汇总的产物。至少给一个：--lakes / --accuracy / --risk",
+              file=sys.stderr)
+        return 1
+
+    if lake_doc is not None:
+        # 湖泊清单自带完整文档结构；其余章节拼在后面（它们本来就是章节形态）。
+        #
+        # 拼接方式是「在页脚前插入」，不是「拆字符串再拼回去」：
+        # build_markdown 的页脚是固定的三行（--- / 数据来源 / 生成时间），
+        # 拿 rsplit("\n---\n") 切会在正文里出现别的分隔线时切错位置。
+        text = lake_doc
+        if sections:
+            extra = grep_mod.build_markdown(
+                title=args.title, sections=sections, meta={},
+            )
+            # 取 extra 里第一个 "## " 到页脚 "---" 之间的正文
+            start = extra.find("\n## ")
+            end = extra.rfind("\n---\n")
+            body = extra[start:end].strip() if start >= 0 and end > start else ""
+            if body:
+                # 插到 lake_doc 自己的页脚之前
+                footer_at = text.rfind("\n---\n")
+                if footer_at > 0:
+                    text = text[:footer_at].rstrip() + "\n\n" + body + "\n" + text[footer_at:]
+                else:
+                    text = text.rstrip() + "\n\n" + body + "\n"
+    else:
+        text = grep_mod.build_markdown(
+            title=args.title, sections=sections,
+            meta={k: v for k, v in meta.items() if v},
+        )
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    md_path = grep_mod.write_markdown(out_dir / "report.md", text)
+    html_path = out_dir / "report.html"
+    html_path.write_text(grep_mod.to_html(text, title=args.title), encoding="utf-8")
+
+    print(f"章节      : {len(sections)} 个（{', '.join(s.heading for s in sections)}）")
+    print(f"Markdown  : {md_path}")
+    print(f"HTML      : {html_path}（自包含，无外部依赖，可直接归档）")
     return 0
 
 
@@ -897,6 +1149,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="冰碛坝：坝体下游坡度（度）；不传则该判据记缺数据")
     p_risk.add_argument("--dem", default=None,
                         help="DEM 路径或 Copernicus 瓦片 URL；给了就从 DEM 量坝体下游坡度")
+    p_risk.add_argument("--dam-position", action="store_true",
+                        help="从湖边界最低点自动估坝体位置（需 --dem 与 --lakes）。"
+                             "比拿湖心当坝体准——湖心是平底，量不出坡向")
+    p_risk.add_argument("--lakes", default=None,
+                        help="湖泊 GeoJSON（配合 --dam-position，坝体从湖边界几何估）")
     p_risk.add_argument("--dem-lat", type=float, default=None,
                         help="坝体纬度（配合 --dem；通常取湖心）")
     p_risk.add_argument("--dem-lon", type=float, default=None,
@@ -928,6 +1185,41 @@ def build_parser() -> argparse.ArgumentParser:
                        help="关闭冰雪掩膜（做消融对比用，不要用于正式报告）")
     p_acc.add_argument("--out", default="output/eval", help="输出目录")
     p_acc.set_defaults(func=cmd_accuracy)
+
+    p_exp = sub.add_parser(
+        "exposure",
+        help="暴露度：算湖到最近道路 / 居民点的球面距离（需自备矢量数据）",
+    )
+    p_exp.add_argument("--input", default=None,
+                       help="输入 GeoTIFF（现场提取湖泊时用）")
+    p_exp.add_argument("--lakes", default=None,
+                       help="已有的湖泊 GeoJSON（优先于 --input，省掉重读影像）")
+    p_exp.add_argument("--preset", default="s2_l2a_6band", choices=sorted(BAND_PRESETS),
+                       help="波段预设（现场提取时用）")
+    p_exp.add_argument("--threshold", type=float, default=0.15,
+                       help="NDWI 阈值（现场提取时用），默认 0.15")
+    p_exp.add_argument("--min-area-km2", type=float, default=0.01,
+                       help="最小面积 km²，默认 0.01（产品口径）")
+    p_exp.add_argument("--roads", required=True,
+                       help="道路矢量（GeoJSON）。本项目不内置地理数据，"
+                            "原因见 glof/core/exposure.py 模块文档")
+    p_exp.add_argument("--settlements", default=None,
+                       help="居民点矢量（GeoJSON）。不给时相关字段为 None（未判定），不是 False")
+    p_exp.add_argument("--buffer-km", type=float, required=True,
+                       help="影响范围半径（km）。**必须显式给**——阈值不藏默认值")
+    p_exp.add_argument("--out", default="output/exposure", help="输出目录")
+    p_exp.set_defaults(func=cmd_exposure)
+
+    p_rep = sub.add_parser(
+        "report",
+        help="把已有产物汇总成报告（Markdown + 自包含 HTML，不新增依赖）",
+    )
+    p_rep.add_argument("--lakes", default=None, help="湖泊 GeoJSON（extract 产出）")
+    p_rep.add_argument("--accuracy", default=None, help="accuracy.json")
+    p_rep.add_argument("--risk", default=None, help="风险分级 JSON")
+    p_rep.add_argument("--title", default="帕米尔冰湖档案 · 评估报告")
+    p_rep.add_argument("--out", default="output/report", help="输出目录")
+    p_rep.set_defaults(func=cmd_report)
 
     return parser
 
