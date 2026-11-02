@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from glof.core import report as grep  # noqa: E402
-from glof.core.accuracy import EvaluationReport, PointMatch  # noqa: E402
+from glof.core.accuracy import ConfusionCounts, EvaluationReport, PointMatch  # noqa: E402
 from glof.core.risk import RiskLevel, assess_ice_dammed, assess_moraine_dammed  # noqa: E402
 from glof.core.water import LakeRecord  # noqa: E402
 
@@ -190,6 +190,15 @@ def test_table_escaping():
     )
     check("二维序列按首行作表头", len(table_rows(md2)) == 2 and table_rows(md2)[0] == ["a", "b"])
 
+    # 有数据行、没表头：必须报错，不能悄悄渲染成「无数据」把数据吞掉
+    expect_value_error(
+        "有数据行但没有表头时报 ValueError（不静默吞数据）",
+        lambda: grep.build_markdown(
+            title="无表头",
+            sections=[grep.ReportSection(heading="x", table=grep.ReportTable([], [[1, 2]]))],
+        ),
+    )
+
 
 def test_unknown_level():
     """UNKNOWN 必须渲染成「未判定（缺数据：…）」，绝不能是「低风险」。"""
@@ -228,6 +237,14 @@ def test_unknown_level():
           risk_level_cell.startswith("未判定") and "缺数据：" in risk_level_cell,
           risk_level_cell)
     check("逐期表未把 UNKNOWN 写成低风险", "低风险" not in risk_level_cell, risk_level_cell)
+
+    # 裸的 RiskAssessment（docstring 明说支持）也必须带出判据值。
+    # 早先 _risk_row 把 value 写死 None，明明量到 1.0003 却印「没量到」。
+    ice = assess_ice_dammed(1.8248, plateau_area_km2=1.8248)
+    check("构造的冰坝判定确实是 HIGH", ice.level is RiskLevel.HIGH, ice.level.value)
+    bare_row = first_data_row(grep.build_risk_report([ice], title="裸判定"))
+    check("裸 RiskAssessment 的判据值不是「没量到」", bare_row[2] != "没量到", bare_row[2])
+    check("裸 RiskAssessment 的判据值 = 面积/平台比值 1.0000", bare_row[2] == "1.0000", bare_row[2])
 
 
 def test_missing_area():
@@ -417,6 +434,58 @@ def test_accuracy_report():
     check("逐点位表里 distance=None 写「没量到」", "| site008 | 没量到 |" in md, "")
     check("逐点位表说明没量到不是距离 0", "不是距离为 0" in md)
     check("没有 pixel_counts 时不编像元级指标", "像元级指标" not in md)
+
+    # 计数缺失 ≠ 计数为零。CLI 落盘的 output/eval/accuracy.json 只有
+    # n_windows / n_matched，没有 n_truth / n_covered；直接喂进来时
+    # 既不能印出字面量 "None"，也不能断言"没有真值点位"。
+    partial = {
+        "n_windows": 28, "n_matched": 3, "point_recall": 0.1071,
+        "radius_km": 0.15, "matches": [], "notes": [],
+    }
+    md_partial = grep.build_accuracy_report(partial)
+    check("缺 n_truth/n_covered 时不印出字面量 None",
+          "None" not in md_partial, next((l for l in md_partial.splitlines() if "None" in l), ""))
+    check("缺 n_truth/n_covered 时写「口径不全」而不是「无真值点位」",
+          "口径不全" in md_partial and "无真值点位" not in md_partial, "")
+    check("缺计数时已知的命中数仍保留（不连坐）", "命中 3 个点位" in md_partial, "")
+
+    # 像元级：分母为零时 accuracy._ratio() 记 0.0 只是为了 JSON 合法，
+    # 报告必须写「没量到」，不能写成 0.0%（= 全错）。
+    zero = EvaluationReport(
+        n_truth=1, n_covered=1, n_matched=0,
+        coverage_rate=1.0, point_recall=0.0, radius_km=0.15, matches=[],
+        pixel_counts=ConfusionCounts(0, 0, 0, 0),
+        notes=[],
+    )
+    md_zero = grep.build_accuracy_report(zero)
+    pixel_rows = [l for l in md_zero.splitlines() if l.startswith("| ") and "没量到" in l]
+    pixel_row = next(
+        (l for l in pixel_rows if l.count("没量到") >= 4), ""
+    )
+    check("像元级分母为零时四项都写「没量到」而不是 0.0%",
+          pixel_row != "" and "0.0%" not in pixel_row,
+          pixel_row or "（像元级数据行里没有四项「没量到」）")
+
+    # 分母非零时照常出数（证明上一条不是把所有比率都改成了「没量到」）
+    real = EvaluationReport(
+        n_truth=1, n_covered=1, n_matched=1,
+        coverage_rate=1.0, point_recall=1.0, radius_km=0.15, matches=[],
+        pixel_counts=ConfusionCounts(8, 2, 4, 100),
+        notes=[],
+    )
+    md_real = grep.build_accuracy_report(real)
+    check("像元级分母非零时正常出百分比（8/10=80.0%）", "| 80.0% |" in md_real, "")
+
+    # matched 缺失不能被 bool() 成「未命中」
+    md_matched = grep.build_accuracy_report({
+        "n_truth": 1, "n_covered": 1, "n_matched": 0, "coverage_rate": 1.0,
+        "point_recall": 0.0, "radius_km": 0.15, "notes": [],
+        "matches": [{"site_id": "s1", "distance_km": 0.2, "matched": None,
+                     "lake_id": 3, "lake_area_km2": None}],
+    })
+    row_s1 = next((l for l in md_matched.splitlines() if l.startswith("| s1 |")), "")
+    check("matched=None 写「没量到」而不是「未命中」",
+          "没量到" in row_s1 and "未命中" not in row_s1, row_s1)
 
     empty = EvaluationReport(
         n_truth=0, n_covered=0, n_matched=0,

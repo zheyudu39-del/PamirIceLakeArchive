@@ -181,7 +181,9 @@ def _cell_text(value: Any) -> str:
     if isinstance(value, int):
         return str(value)
     if isinstance(value, Mapping):
-        return "；".join(f"{k}={v}" for k, v in value.items())
+        # 值也要走 _cell_text：直接 f"{v}" 会把 None 印成字面量 "None"，
+        # 那正是本模块要消灭的东西。列表/元组分支早就这么做了，这里保持一致。
+        return "；".join(f"{k}={_cell_text(v)}" for k, v in value.items())
     if isinstance(value, (list, tuple)):
         return "、".join(_cell_text(v) for v in value)
     text = str(getattr(value, "value", value))
@@ -215,10 +217,20 @@ def _coerce_table(table: ReportTable | Sequence[Sequence[Any]]) -> ReportTable:
 
 
 def _render_table(table: ReportTable | Sequence[Sequence[Any]]) -> str:
-    """Markdown 表格。空表输出「无数据」，不输出一条光秃秃的分隔线。"""
+    """Markdown 表格。空表输出「无数据」，不输出一条光秃秃的分隔线。
+
+    有数据行却没有表头时直接 ``ValueError``：早先这里返回「表格为空」，
+    于是 ``ReportTable([], [[1, 2]])`` 里的两行数据被悄悄吞掉，报告显示
+    "无数据"——数据在内存里、却从报告里消失，比排版难看严重得多。
+    """
     table = _coerce_table(table)
     headers = list(table.headers)
     if not headers:
+        if table.rows:
+            raise ValueError(
+                f"表格有 {len(table.rows)} 行数据但没有表头；"
+                "拒绝把数据悄悄渲染成「无数据」"
+            )
         return "**无数据**（表格为空）"
 
     n = len(headers)
@@ -543,10 +555,25 @@ def _risk_row(item: Any) -> dict[str, Any]:
             "summary": str(getattr(assessment, "summary", "") or ""),
         }
 
+    # 裸的 RiskAssessment：没有 date / area / policy，但**有判据值**。
+    # 早先这里把 value 写死成 None，于是 docstring 明说支持的 RiskAssessment
+    # 输入会印出「没量到」——明明 criteria[0].value 有数，报告却说没量到，
+    # 这是反向的诚实性错误（把量到的说成没量到），同样会误导读者。
+    # 取第一条有有限数值的判据，口径与 risk_series.SeriesAssessment.value 一致。
+    value: float | None = None
+    for criterion in getattr(item, "criteria", None) or ():
+        raw = getattr(criterion, "value", None)
+        if isinstance(raw, bool):
+            continue
+        number = _as_float(raw)
+        if number is not None:
+            value = number
+            break
+
     return {
         "date": "—",
         "area_km2": None,
-        "value": None,
+        "value": value,
         "level": getattr(item, "level", None),
         "policy": "",
         "reasons": _as_reasons(getattr(item, "reasons", [])),
@@ -626,6 +653,36 @@ def _pct(value: Any) -> str:
     return MISSING_TEXT if number is None else f"{number * 100:.1f}%"
 
 
+def _as_count(value: Any) -> int | None:
+    """计数字段：非负整数才算数到，其余一律 None（渲染成「没量到」）。
+
+    ``str(None)`` 会在表格里印出字面量 ``None``——一个缺失被当成一个值展示，
+    和印成 0 是同一类错误，只是更难发现。
+    """
+    number = _as_float(value)
+    if number is None or number < 0 or number != int(number):
+        return None
+    return int(number)
+
+
+def _pixel_metric(pixel_counts: Any, numerator: str, denominator: Sequence[str]) -> str:
+    """像元级指标。**分母为零时返回「没量到」，不是 0.0%。**
+
+    ``accuracy._ratio()`` 在分母为零时返回 0.0 是为了 JSON 合法（nan 不是合法
+    JSON），并明确要求调用方结合样本数一起看。报告如果直接印 ``0.0%``，
+    等于把「没有样本」说成「全错」——和把点位召回率的分母为零写成 0.0% 是同一个坑。
+    """
+    num = _as_float(_field(pixel_counts, numerator))
+    parts = [_as_float(_field(pixel_counts, name)) for name in denominator]
+    if num is None:
+        return MISSING_TEXT
+    # 计数齐全时才敢判"分母为零"；只有比率、没有计数的输入无法核对分母，
+    # 仍按调用方给的比率渲染——那是它明确给出的数，不是本模块补出来的。
+    if all(part is not None for part in parts) and sum(parts) <= 0:
+        return MISSING_TEXT
+    return _pct(num)
+
+
 def build_accuracy_report(report: "EvaluationReport") -> str:
     """精度评价章节（Markdown，从 ``##`` 开始，可直接塞进 ReportSection.body）。
 
@@ -634,9 +691,12 @@ def build_accuracy_report(report: "EvaluationReport") -> str:
     所以章节里固定有一句「点位召回不是边界精度，不能写成 IoU/F1」，
     即使调用方只截取表格，也截不掉这句声明。
     """
-    n_truth = _field(report, "n_truth")
-    n_covered = _field(report, "n_covered")
-    n_matched = _field(report, "n_matched")
+    # 计数缺失（例如调用方直接把 CLI 落盘的 accuracy.json 喂进来——那份文件
+    # 只有 n_windows / n_matched，没有 n_truth / n_covered）时必须是 None，
+    # 不能是 0：0 会让下面的 "n_truth == 0" 分支把"没给数"说成"没有真值点位"。
+    n_truth = _as_count(_field(report, "n_truth"))
+    n_covered = _as_count(_field(report, "n_covered"))
+    n_matched = _as_count(_field(report, "n_matched"))
     coverage_rate = _field(report, "coverage_rate")
     point_recall = _field(report, "point_recall")
     radius_km = _field(report, "radius_km")
@@ -648,12 +708,31 @@ def build_accuracy_report(report: "EvaluationReport") -> str:
 
     # 分母为零时比率没有意义。accuracy._ratio() 出于 JSON 合法性记 0.0，
     # 但报告不能把它印成 0.0%——那会被读成"全错"。这里显式改成"没量到"。
-    coverage_text = _pct(coverage_rate) if n_truth else f"{MISSING_TEXT}（无真值点位）"
-    recall_text = (
-        _pct(point_recall) if n_covered else f"{MISSING_TEXT}（无被覆盖点位）"
-    )
+    if n_truth is None or n_covered is None:
+        coverage_text = f"{MISSING_TEXT}（未提供真值/覆盖点数）"
+        recall_text = f"{MISSING_TEXT}（未提供覆盖点数）"
+    else:
+        coverage_text = _pct(coverage_rate) if n_truth else f"{MISSING_TEXT}（无真值点位）"
+        recall_text = (
+            _pct(point_recall) if n_covered else f"{MISSING_TEXT}（无被覆盖点位）"
+        )
 
-    if n_truth == 0 or n_covered == 0:
+    if n_truth is None or n_covered is None:
+        # 缺计数 ≠ 计数为零。分不清这两件事时，宁可说"没量到"并列出已知的部分，
+        # 也不能替调用方断言"没有真值点位"。
+        known = []
+        if n_matched is not None:
+            known.append(f"命中 {n_matched} 个点位")
+        if _as_float(point_recall) is not None:
+            known.append(f"调用方给出的召回率 {_pct(point_recall)}")
+        detail = ("；".join(known) + "，") if known else ""
+        lines.append(
+            f"**口径不全**：未提供真值点位数或被覆盖点位数（{detail}"
+            "分母未知），因此不报告覆盖率与召回率百分比。"
+            "缺计数不等于计数为零——需要调用方把 n_truth / n_covered 一起给出。"
+        )
+        lines.append("")
+    elif n_truth == 0 or n_covered == 0:
         lines.append(
             "**无可评价对象**：没有真值点位，或没有任何点位被影像覆盖，"
             "召回率没有分母。此时不报告百分比——分母为零时记 0.0% 等于把"
@@ -673,10 +752,13 @@ def build_accuracy_report(report: "EvaluationReport") -> str:
     metrics = ReportTable(
         headers=["指标", "值", "说明"],
         rows=[
-            ["真值点位数", str(n_truth), "ICIMOD HMA GLOF 数据库点位"],
-            ["影像覆盖点位数", str(n_covered), "落在评估影像窗口内的点位"],
+            ["真值点位数", MISSING_TEXT if n_truth is None else str(n_truth),
+             "ICIMOD HMA GLOF 数据库点位"],
+            ["影像覆盖点位数", MISSING_TEXT if n_covered is None else str(n_covered),
+             "落在评估影像窗口内的点位"],
             ["覆盖率", coverage_text, "覆盖数 ÷ 真值总数"],
-            ["命中点位数", str(n_matched), "距最近水体边界 ≤ 半径"],
+            ["命中点位数", MISSING_TEXT if n_matched is None else str(n_matched),
+             "距最近水体边界 ≤ 半径"],
             ["点位召回率", recall_text, "命中数 ÷ 覆盖数（分母不是真值总数）"],
             [
                 "召回半径 km",
@@ -698,14 +780,20 @@ def build_accuracy_report(report: "EvaluationReport") -> str:
         match_rows: list[list[str]] = []
         for match in matches:
             distance = _as_float(_field(match, "distance_km"))
-            matched = bool(_field(match, "matched", False))
+            # matched 缺失时不能 bool(None) 成 False——那会把"不知道命中没有"
+            # 写成"未命中"，和把 UNKNOWN 写成低风险是同一类错误。
+            matched_raw = _field(match, "matched")
+            matched_text = (
+                MISSING_TEXT if matched_raw is None
+                else ("命中" if bool(matched_raw) else "未命中")
+            )
             lake_id = _field(match, "lake_id")
             lake_area = _as_float(_field(match, "lake_area_km2"))
             match_rows.append(
                 [
                     str(_field(match, "site_id", "—")),
                     MISSING_TEXT if distance is None else f"{distance:.4f}",
-                    "命中" if matched else "未命中",
+                    matched_text,
                     "—" if lake_id is None else str(lake_id),
                     _fmt_area_km2(lake_area),
                 ]
@@ -737,10 +825,8 @@ def build_accuracy_report(report: "EvaluationReport") -> str:
         lines.append("")
 
     if pixel_counts is not None:
-        precision = _field(pixel_counts, "precision")
-        recall = _field(pixel_counts, "recall")
-        f1 = _field(pixel_counts, "f1")
-        iou = _field(pixel_counts, "iou")
+        # 分母用混淆矩阵的计数，而不是只看比率：只有知道分母非零，
+        # "0.0%" 才能被读成"算出来是零"，否则它是 accuracy._ratio() 的缺省值。
         lines.extend(
             [
                 "### 像元级指标（与上面的点位召回不是同一口径）",
@@ -750,10 +836,12 @@ def build_accuracy_report(report: "EvaluationReport") -> str:
                         headers=["精确率", "召回率", "F1", "IoU"],
                         rows=[
                             [
-                                _pct(precision),
-                                _pct(recall),
-                                _pct(f1),
-                                _pct(iou),
+                                _pixel_metric(pixel_counts, "precision", ("true_positive", "false_positive")),
+                                _pixel_metric(pixel_counts, "recall", ("true_positive", "false_negative")),
+                                # F1 = 2PR/(P+R)，分母是 P+R：TP=0 时 P+R=0，
+                                # f1 无定义（accuracy._ratio 记 0.0 只是为了 JSON 合法）。
+                                _pixel_metric(pixel_counts, "f1", ("true_positive",)),
+                                _pixel_metric(pixel_counts, "iou", ("true_positive", "false_positive", "false_negative")),
                             ]
                         ],
                     )
