@@ -1041,7 +1041,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     html_path = out_dir / "report.html"
     html_path.write_text(grep_mod.to_html(text, title=args.title), encoding="utf-8")
 
-    print(f"章节      : {len(sections)} 个（{', '.join(s.heading for s in sections)}）")
+    # section 的 heading 可能为空（body 自带标题时不重复加），此时打印空括号很怪
+    names = [s.heading for s in sections if s.heading]
+    extra = "湖泊清单" if lake_doc is not None else ""
+    if extra:
+        names.insert(0, extra)
+    print(f"章节      : {len(names)} 个（{', '.join(names) if names else '无标题章节'}）")
     print(f"Markdown  : {md_path}")
     print(f"HTML      : {html_path}（自包含，无外部依赖，可直接归档）")
     return 0
