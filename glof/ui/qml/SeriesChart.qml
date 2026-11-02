@@ -20,6 +20,7 @@
 
 import QtQuick
 import QtCharts
+import "."
 
 Item {
     id: root
@@ -319,12 +320,34 @@ Item {
         anchors.fill: parent
     }
 
-    Text {
+    Column {
         anchors.centerIn: parent
+        width: Math.min(parent.width - 48, 400)
+        spacing: 10
         visible: !root.hasData
-        text: "检索时序后显示曲线"
-        font.pixelSize: 14
-        color: root.pal.muted
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "湖泊面积时序"
+            font.pixelSize: 18
+            font.bold: true
+            color: Theme.textPrimary
+        }
+        Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+            text: "在左侧选择年份范围并点击「开始检索」。\n全年 10 m 检索约需 40 秒，期间可取消。"
+            font.pixelSize: Theme.fontLabel
+            color: Theme.textSecondary
+            lineHeight: 1.4
+        }
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "橙色虚线：满蓄平台　·　红色竖线：溃决事件年"
+            font.pixelSize: Theme.fontCaption
+            color: Theme.textMuted
+        }
     }
 
     Component {

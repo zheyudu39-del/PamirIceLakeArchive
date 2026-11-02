@@ -21,6 +21,7 @@
 
 import QtQuick
 import QtQuick.Shapes
+import "."
 
 Rectangle {
     id: mapRoot
@@ -183,11 +184,47 @@ Rectangle {
         }
     }
 
-    Text {
+    // 空态不是故障态：把下一步操作直接写在这里。
+    Column {
         anchors.centerIn: parent
+        width: Math.min(parent.width - 48, 390)
+        spacing: 12
         visible: imageWidth === 0
-        text: qsTr("打开影像后显示地图")
-        color: "#9aa0a6"
-        font.pixelSize: 14
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "影像视图"
+            color: "#e5e9ef"
+            font.pixelSize: 20
+            font.bold: true
+        }
+        Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+            text: "选择本地 Sentinel-2 影像并点击「开始提取」，\n或点击「刷新最新观测」联网获取影像。"
+            color: "#b2bbc6"
+            font.pixelSize: Theme.fontLabel
+            lineHeight: 1.4
+        }
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: hintRow.width + 24
+            height: 28
+            radius: 14
+            color: "#242b34"
+            border.color: "#39434f"
+
+            Row {
+                id: hintRow
+                anchors.centerIn: parent
+                spacing: 8
+                Text { text: "滚轮缩放"; color: "#c0c8d2"; font.pixelSize: 11 }
+                Text { text: "·"; color: "#6f7b88"; font.pixelSize: 11 }
+                Text { text: "拖动平移"; color: "#c0c8d2"; font.pixelSize: 11 }
+                Text { text: "·"; color: "#6f7b88"; font.pixelSize: 11 }
+                Text { text: "点击湖泊查看判据"; color: "#c0c8d2"; font.pixelSize: 11 }
+            }
+        }
     }
 }

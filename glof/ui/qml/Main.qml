@@ -523,54 +523,88 @@ ApplicationWindow {
                             app.latestLookbackDays)
                     }
 
-                    RowLayout {
+                    // 常驻状态卡：未请求 / 加载 / 有观测 / 无可用观测。
+                    // 改版前没观测时整块消失，用户看不到这里会返回什么；
+                    // 加载时旧结果突然消失、结果回来又把下面布局顶下去。
+                    // 现在卡片占同样的位置，只切内部状态。
+                    Rectangle {
                         Layout.fillWidth: true
-                        spacing: Theme.gapSm
                         visible: app.latestBusy
+                        implicitHeight: latestLoadingCol.implicitHeight + 16
+                        radius: Theme.radiusSm
+                        color: Theme.accentSoft
+                        border.width: 1
+                        border.color: "#c6dafc"
 
-                        BusyIndicator {
-                            running: app.latestBusy
-                            visible: running
-                            implicitWidth: 22
-                            implicitHeight: 22
-                        }
-                        Text {
-                            objectName: "latestLoadingLabel"
-                            Layout.fillWidth: true
-                            text: "正在检索最新影像 …"
-                            wrapMode: Text.Wrap
-                            font.pixelSize: Theme.fontCaption
-                            color: Theme.textSecondary
+                        ColumnLayout {
+                            id: latestLoadingCol
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 6
+
+                            RowLayout {
+                                spacing: Theme.gapSm
+                                BusyIndicator {
+                                    running: app.latestBusy
+                                    implicitWidth: 20
+                                    implicitHeight: 20
+                                }
+                                Text {
+                                    objectName: "latestLoadingLabel"
+                                    Layout.fillWidth: true
+                                    text: "正在联网取最近一景并读取影像…"
+                                    wrapMode: Text.Wrap
+                                    font.pixelSize: Theme.fontCaption
+                                    font.bold: true
+                                    color: Theme.accentPressed
+                                }
+                            }
+                            Text {
+                                text: "通常需要十几秒；保留上一景直到新影像就绪。"
+                                wrapMode: Text.Wrap
+                                font.pixelSize: Theme.fontCaption
+                                color: Theme.textSecondary
+                            }
                         }
                     }
 
-                    // 结果区。三种状态分开措辞：
-                    //   a) 没观测（latestAgeDays < 0）  -> "暂无可用观测"
-                    //   b) 有观测但没量到面积（NaN）    -> "面积没量到（无水面信号）" + 季节警告
-                    //   c) 正常                          -> 日期 / 距今天数 / 面积 / 湖泊数
+                    // 结果区：
+                    //   a) 有观测但没量到面积（NaN） -> "面积没量到" + 原因
+                    //   b) 正常                       -> 日期 / 距今天数 / 面积 / 湖泊数
                     Rectangle {
                         objectName: "latestPanel"
                         Layout.fillWidth: true
                         visible: !app.latestBusy && app.latestAgeDays >= 0
                         implicitHeight: latestCol.implicitHeight + 16
                         radius: Theme.radiusSm
-                        color: "#f8fafc"
+                        color: Number.isNaN(app.latestAreaKm2) ? Theme.warningSoft
+                                                               : Theme.successSoft
                         border.width: 1
-                        border.color: Theme.divider
+                        border.color: Number.isNaN(app.latestAreaKm2) ? "#f0d9a8"
+                                                                       : "#b7dfbf"
 
                         ColumnLayout {
                             id: latestCol
                             anchors.fill: parent
                             anchors.margins: 8
-                            spacing: 3
+                            spacing: 5
 
-                            // 新鲜度：日期 + 距今 N 天。这是本功能诚实性的核心。
+                            Text {
+                                Layout.fillWidth: true
+                                text: Number.isNaN(app.latestAreaKm2)
+                                      ? "● 观测有效，但未量到湖面"
+                                      : "● 已获取最新可用影像"
+                                font.pixelSize: Theme.fontCaption
+                                font.bold: true
+                                color: Number.isNaN(app.latestAreaKm2)
+                                       ? Theme.warning : Theme.success
+                            }
+
                             Text {
                                 objectName: "latestFreshnessLabel"
                                 Layout.fillWidth: true
                                 wrapMode: Text.Wrap
-                                font.pixelSize: Theme.fontCaption
-                                font.bold: true
+                                font.pixelSize: Theme.fontBody
                                 color: Theme.textPrimary
                                 text: "观测日期 " + app.latestDate
                                       + "　距今 " + app.latestAgeDays + " 天"
@@ -582,8 +616,7 @@ ApplicationWindow {
                                 wrapMode: Text.Wrap
                                 font.pixelSize: Theme.fontBody
                                 font.bold: true
-                                // NaN 判断：QML 里 Number.isNaN 最稳；面积没量到时
-                                // 绝不显示 0.00 km²（缺数据返回 None 的项目硬规矩）。
+                                // 面积没量到时绝不显示 0.00 km²。
                                 color: Number.isNaN(app.latestAreaKm2)
                                        ? Theme.danger : Theme.success
                                 text: Number.isNaN(app.latestAreaKm2)
@@ -604,16 +637,19 @@ ApplicationWindow {
                         }
                     }
 
-                    // a) 没观测：明确说"暂无可用观测"，不说"没有湖"
+                    // 未请求 / 无可用观测 / 检索失败：卡片永远可见。
                     Text {
                         objectName: "latestEmptyLabel"
                         Layout.fillWidth: true
                         visible: !app.latestBusy && app.latestAgeDays < 0
-                                 && app.latestMessage !== ""
                         wrapMode: Text.Wrap
                         font.pixelSize: Theme.fontCaption
-                        color: Theme.textMuted
-                        text: app.latestMessage
+                        color: app.latestMessage === "" ? Theme.textMuted
+                               : (app.lastError !== "" ? Theme.danger : Theme.textSecondary)
+                        text: app.latestMessage !== ""
+                              ? app.latestMessage
+                              : "尚未刷新。点击上方按钮后，会显示观测日期、距今天数，"
+                                + "并在地图中显示该景影像。"
                     }
 
                     Item { Layout.fillHeight: true }  // 弹性占位，把提示顶到面板底部
