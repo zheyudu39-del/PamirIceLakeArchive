@@ -266,8 +266,19 @@ def _angle(a, b) -> float:
 
 
 def _geod_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
-    """WGS84 椭球上的大地线距离（米）。"""
-    return float(_GEOD.inv(lon1, lat1, lon2, lat2)[2])
+    """WGS84 椭球上的大地线距离（米）。
+
+    坐标含 NaN/Inf 时 ``Geod.inv`` 会安静地返回 NaN，不报错。这里必须拦住：
+    NaN 传到 ``_in_buffer()`` 会被 ``nan <= buffer`` 判成 False，下游读成
+    "量到了，且不在范围内"——正是本项目最危险的"没量到写成没命中"。
+    """
+    distance = float(_GEOD.inv(lon1, lat1, lon2, lat2)[2])
+    if not math.isfinite(distance):
+        raise ValueError(
+            f"坐标 ({lon1!r}, {lat1!r}) -> ({lon2!r}, {lat2!r}) 含 NaN/Inf，距离无定义；"
+            "直接传要素时本模块不做坐标清洗，请先用 load_features() 读入（它会拒绝这类文件）"
+        )
+    return distance
 
 
 def _point_distance_m(lon: float, lat: float, pos: Sequence[float]) -> float:
@@ -381,14 +392,35 @@ def _distance_to_geometry_m(lon: float, lat: float, geom: Mapping[str, Any]) -> 
 
 
 def _iter_feature_dicts(features: Any) -> Iterable[Mapping[str, Any]]:
-    """接受 load_features 的返回值，也容忍直接传 FeatureCollection / 单个 Feature。"""
+    """接受 load_features 的返回值，也容忍直接传 FeatureCollection / Feature / 裸几何。
+
+    传字符串或 Path 时直接报错。否则字符串会被逐字符迭代、没有一个字符是 Mapping，
+    结果悄悄变成 ``None``——调用方会把它读成"研究区没有道路"，而实际只是忘了先
+    ``load_features(path)``。路径与要素是两种东西，不能靠"没有要素"来兜底。
+    """
     if features is None:
         return []
+    if isinstance(features, (str, bytes, Path)):
+        raise TypeError(
+            f"features 收到路径 {features!r}，但这里要的是要素列表；"
+            "请先调用 load_features(path) 再把返回值传进来"
+        )
     if isinstance(features, Mapping):
-        if features.get("type") == "FeatureCollection":
+        ftype = features.get("type")
+        if ftype == "FeatureCollection":
             return [f for f in features.get("features") or [] if isinstance(f, Mapping)]
+        if ftype in _GEOMETRY_TYPES:
+            # 裸几何：与 load_features() 对顶层几何的宽容口径保持一致，
+            # 不能因为少包一层 Feature 就把它当成"没有数据"。
+            return [{"type": "Feature", "properties": {}, "geometry": features}]
         return [features]
-    return [f for f in features if isinstance(f, Mapping)]
+    try:
+        items = list(features)
+    except TypeError as exc:
+        raise TypeError(
+            f"features 既不是要素列表也不是 Feature/FeatureCollection：{type(features)!r}"
+        ) from exc
+    return [f for f in items if isinstance(f, Mapping)]
 
 
 def nearest_distance_km(lon: float, lat: float, features: Sequence[dict] | None) -> float | None:
@@ -475,7 +507,9 @@ class ExposureRecord:
 
 
 def _in_buffer(distance_km: float | None, buffer_km: float) -> bool | None:
-    if distance_km is None:
+    """三态判定。NaN 也必须走 None：``nan <= buffer`` 是 False，
+    那会把"距离没量出来"写成"量到了且不在范围内"。"""
+    if distance_km is None or not math.isfinite(distance_km):
         return None
     return distance_km <= buffer_km
 

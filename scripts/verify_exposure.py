@@ -95,18 +95,26 @@ def test_spherical_distance():
     check("1° 纬差 ≈ 111.19 km，误差 < 0.5%",
           abs(d - LAT_1DEG_KM) / LAT_1DEG_KM < 0.005,
           f"{d:.3f} km（参考 {LAT_1DEG_KM} km，偏差 {abs(d - LAT_1DEG_KM) / LAT_1DEG_KM:.3%}）")
-    # WGS84 椭球真值（36°N→37°N 实测 110.968 km）：不是 0，也不是把度数当公里。
-    check("是椭球大地线，不是度数直接当公里", 110.5 < d < 111.5, f"{d:.3f} km")
+    # WGS84 椭球真值：36°N→37°N 的子午线弧长。这个数不是查来的，
+    # 是独立数值积分 ∫ M(φ)dφ（M = a(1-e²)/(1-e²sin²φ)^1.5）得到的
+    # 110.96830444 km，与 pyproj.Geod 相差 6e-10 km。
+    # 容差必须收到 1 m：球面 haversine（R=6371.0088）会给出 111.195 km，
+    # 差 227 m——放宽到 0.5% 的话，把椭球换成球面整套断言照样全过（实测如此）。
+    check("是 WGS84 椭球大地线，不是球面近似（容差 1 m）",
+          abs(d - 110.968304) < 0.001,
+          f"{d:.6f} km（椭球 110.968304，球面 111.195，差 {abs(d - SPHERE_DEG_KM):.3f} km）")
 
     print("\n[2] 经度方向的距离随纬度收缩")
     east = [point_feature(78.0, 36.0)]
     d_lon = gexp.nearest_distance_km(77.0, 36.0, east)
     check("36°N 处 1° 经差量到了", d_lon is not None, repr(d_lon))
     assert d_lon is not None
-    expected = SPHERE_DEG_KM * math.cos(math.radians(36.0))
-    check("36°N 处 1° 经差 ≈ 90 km，误差 < 0.5%",
-          abs(d_lon - expected) / expected < 0.005,
-          f"{d_lon:.3f} km（球面参考 {expected:.3f} km）")
+    # 36°N 纬线上的 1° 弧长，同样由独立数值积分 ∫ N cosφ dλ 得到 90.16369 km，
+    # pyproj 给 90.16329（差 0.4 m，大地线在纬线方向上比平行圈略短）。
+    # 球面近似给 89.959 km，差 204 m——所以容差也收到 10 m。
+    check("36°N 处 1° 经差 ≈ 90.163 km（椭球，容差 10 m）",
+          abs(d_lon - 90.16329) < 0.010,
+          f"{d_lon:.6f} km（球面参考 {SPHERE_DEG_KM * math.cos(math.radians(36.0)):.3f} km）")
     check("明显小于 1° 纬差（不是 111 km）", d_lon < 95.0, f"{d_lon:.3f} km")
     ratio = d_lon / d
     check("经/纬距离比 ≈ cos(36°) = 0.809",
@@ -213,6 +221,22 @@ def test_empty_is_none():
     check("道路文件为空时 in_road_buffer = None（不是 False）",
           recs[0].in_road_buffer is None, repr(recs[0].in_road_buffer))
 
+    # NaN 距离绝不能落进 False：`nan <= buffer` 在 Python 里是 False，
+    # 于是"距离没量出来"会被下游读成"量到了，且不在范围内"。
+    # 这是本项目最危险的错误形态，必须两条都堵住。
+    check("NaN 距离的缓冲判定是 None（不是 False）",
+          gexp._in_buffer(float("nan"), 5.0) is None, repr(gexp._in_buffer(float("nan"), 5.0)))
+    nan_geom = [{"type": "Feature", "properties": {},
+                 "geometry": {"type": "Point", "coordinates": [float("nan"), 36.1]}}]
+    try:
+        value = gexp.nearest_distance_km(77.0, 36.0, nan_geom)
+        ok = value is not None and math.isfinite(value)
+        detail = f"得到 {value!r}"
+    except ValueError:
+        ok = True
+        detail = "抛 ValueError"
+    check("几何含 NaN 时不会安静地返回 nan 距离", ok, detail)
+
 
 def test_settlement_tristate():
     """没给居民点数据时，三个字段都是 None，不是 False。"""
@@ -299,6 +323,29 @@ def test_nearest_of_many():
     check("结果是最近那个要素的距离", d is not None and abs(d - d_near) < 1e-9,
           f"{d:.3f} km")
     check("不是先遇到的那个（约 90 km）", d < 5.0, f"{d:.3f} km")
+
+    # 传裸几何也要能算。之前裸几何被当成"没有数据"返回 None——
+    # 而 load_features() 明明接受顶层裸几何，两条入口口径不一致。
+    bare = {"type": "Point", "coordinates": [77.02, 36.0]}
+    d_bare = gexp.nearest_distance_km(77.0, 36.0, bare)
+    check("裸几何（没有 Feature 包装）也能量到",
+          d_bare is not None and abs(d_bare - d_near) < 1e-9,
+          repr(d_bare))
+
+    # 把路径当成要素传进来，必须报错。否则字符串被逐字符迭代、一个 Mapping 都没有，
+    # 结果悄悄变成 None，调用方读成"研究区没有道路"。
+    try:
+        gexp.nearest_distance_km(77.0, 36.0, "data/roads.geojson")
+        ok = False
+    except TypeError:
+        ok = True
+    check("把路径当要素传进来抛 TypeError（不是悄悄返回 None）", ok)
+    try:
+        gexp.nearest_distance_km(77.0, 36.0, Path("data/roads.geojson"))
+        ok = False
+    except TypeError:
+        ok = True
+    check("Path 对象当要素传进来同样抛 TypeError", ok)
 
 
 def test_load_features():
