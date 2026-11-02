@@ -50,7 +50,7 @@
 
 ## 现在完成到什么程度
 
-**能跑的部分**（12 个验证脚本、170+ 断言全部通过）：
+**能跑的部分**（13 个验证脚本、514 项断言全部通过）：
 
 | 能力 | 入口 | 状态 |
 |---|---|---|
@@ -58,25 +58,38 @@
 | 水体提取 + 面积统计 | `glof.cli extract` | ✅ |
 | 溃决湖编目查询 | `glof.cli inventory` | ✅ ICIMOD HMA GLOF v4.0 |
 | 分坝型风险分级 | `glof.cli risk` | ✅ 含阈值敏感性 |
+| 最新可用观测 | `glof.cli latest` | ✅ 拉最近一景，影像上地图 |
 | 精度评价（弱真值） | `glof.cli accuracy` | ⚠️ 见下 |
 | DEM 坝体下游坡度 | `glof.cli risk --dem` | ⚠️ 见下 |
+| **坝体位置自动估计** | `glof.cli risk --dam-position` | ✅ 边界最低点，替掉湖心 |
+| **暴露度评估** | `glof.cli exposure` | ⚠️ 需自备矢量数据，见下 |
+| **报告导出** | `glof.cli report` | ✅ Markdown + 自包含 HTML |
 | 桌面界面 | `python -m glof.ui` | ✅ QML，含地图/时序/风险表 |
 
-**两项需要如实说明的局限**——这两条比任何数字都重要：
+**四项需要如实说明的局限**——这几条比任何数字都重要：
 
-- **精度评价**：以 ICIMOD 历史溃决点作弱真值，点位召回率 11.1%。
-  未命中主因不是算法：17 个窗口提出了水体，其中 13 个距点位超过 1 km
-  （中位 1.37 km）。**历史事件坐标与当前残湖的几何中心本来就不一致**。
-  所以这个数测不了算法检出率，方法不适配，结论已在
-  `docs/精度评价契约.md` §6 完整记录。
+- **精度评价**：以 ICIMOD 历史溃决点作弱真值，点位召回率 10.7%（3/28，
+  半径 0.15 km）。未命中主因不是算法：18 个窗口提出了水体，其中 14 个距
+  点位超过 1 km（中位 1.40 km，最大 3.08 km）。**历史事件坐标与当前残湖的
+  几何中心本来就不一致**，0.15 km 的搜索半径够不着这个偏移。所以这个数
+  测不了算法检出率，方法不适配，结论已在 `docs/精度评价契约.md` §6 完整记录。
 - **DEM 坡度**：用湖心代替坝体位置是错的。实测克亚吉尔湖心四周 500 m
   只有 +10~+250 m 岸坡，量出 -0.01°；真实坡地可达 52°。
-  已加保护（`MIN_MEASURABLE_SLOPE_DEG = 1.0`）把近水平结果退回 `UNKNOWN`，
-  不把假值送进判定。要真正用上需坝体位置，不是湖心。
+  已加保护（`MIN_MEASURABLE_SLOPE_DEG = 1.0`）把近水平结果退回 `UNKNOWN`。
+  `--dam-position` 已实现坝体自动估计（边界最低点），合成 DEM 上实测
+  把 20° 的真实坡量成 22.74°（偏差 2.7°），而湖心量成 0.56°（偏差 19.4°）。
+  **但真实 Kyagar 上仍量出 -0.06°**——它是冰坝湖，坝体是冰川冰，
+  DEM 量的是冰面高程，量不出冰川背后的坡。这是数据源限制，不是算法问题。
+- **暴露度**：模块与 CLI 都已就位，但**不内置任何地理数据**。
+  OSM Overpass 2026-11-02 复测仍不可达（overpass-api.de 返回 502，
+  kumi.systems 超时）。编一份 G314 坐标比缺数据危险——缺数据下游会走
+  UNKNOWN，编的坐标会被当真值用。要真用需自备道路/居民点 GeoJSON。
+- **最新观测的「实时」上限**：Sentinel-2 重访 5 天 + L2A 处理 1–3 天，
+  实测 2026-11-02 最新一景是 10-28（距今 5 天）。且近 120 天 64 景里
+  云量 <20% 的只有 10 景（16%）。所以叫「最新可用观测」而不是"实时"。
 
-**尚未实现**：SAR 分支（方案中写了双源融合）、G314 暴露度清单、
-报告导出、PyInstaller 打包。已实现部分与计划部分的比例见
-`docs/选题诊断与修正建议.md` §8。
+**尚未实现**：SAR 分支（方案中写了双源融合）、PyInstaller 打包。
+已实现部分与计划部分的比例见 `docs/选题诊断与修正建议.md` §8。
 
 ---
 
@@ -87,16 +100,27 @@
 python -m venv .venv
 ./.venv/Scripts/python.exe -m pip install -r requirements.txt
 
-# 2. 八条命令验证整条链路（离线、秒级、可重复）
-./.venv/Scripts/python.exe scripts/verify_pipeline.py       # 提取精度：12 条断言
-./.venv/Scripts/python.exe scripts/verify_resampling.py     # 逐波段重采样：14 条断言
-./.venv/Scripts/python.exe scripts/verify_risk.py           # 风险分级：25 条断言
-./.venv/Scripts/python.exe scripts/verify_risk_series.py    # 时序→风险链路：23 条断言
-./.venv/Scripts/python.exe scripts/ui_spike.py              # 界面性能 gate：4 条判定
-./.venv/Scripts/python.exe scripts/smoke_ui_map.py          # QML 冒烟：地图 26 条
-./.venv/Scripts/python.exe scripts/smoke_ui_series.py       # QML 冒烟：时序+线程
-./.venv/Scripts/python.exe scripts/smoke_ui_table.py        # QML 冒烟：风险表 35 条
-./.venv/Scripts/python.exe scripts/smoke_ui_app.py          # QML 冒烟：主窗口 35 条
+# 2. 13 个验证脚本（全部离线、秒级、可重复；合计 514 项断言）
+./.venv/Scripts/python.exe scripts/verify_pipeline.py         # 提取精度：12 条
+./.venv/Scripts/python.exe scripts/verify_resampling.py       # 逐波段重采样：14 条
+./.venv/Scripts/python.exe scripts/verify_risk.py             # 风险分级：25 条
+./.venv/Scripts/python.exe scripts/verify_risk_series.py      # 时序→风险：23 条
+./.venv/Scripts/python.exe scripts/verify_accuracy.py         # 精度评价：48 条
+./.venv/Scripts/python.exe scripts/verify_terrain.py          # DEM 坡度：39 条
+./.venv/Scripts/python.exe scripts/verify_dam_position.py     # 坝体位置：43 条
+./.venv/Scripts/python.exe scripts/verify_exposure.py         # 暴露度：64 条
+./.venv/Scripts/python.exe scripts/verify_report.py           # 报告导出
+./.venv/Scripts/python.exe scripts/verify_latest.py           # 最新观测：82 条
+./.venv/Scripts/python.exe scripts/verify_series_progress.py  # 时序进度/取消：13 条
+./.venv/Scripts/python.exe scripts/verify_cli_wiring.py       # CLI 接线：40 条
+./.venv/Scripts/python.exe scripts/verify_event_years.py      # 点位画像：12 条
+
+# 界面冒烟（offscreen，不需要显示器）
+./.venv/Scripts/python.exe scripts/smoke_ui_app.py            # 主窗口 55 条
+./.venv/Scripts/python.exe scripts/smoke_ui_map.py            # 地图 26 条
+./.venv/Scripts/python.exe scripts/smoke_ui_table.py          # 风险表 35 条
+./.venv/Scripts/python.exe scripts/smoke_ui_series.py         # 时序 + 线程
+./.venv/Scripts/python.exe scripts/smoke_ui_latest.py         # 最新观测 42 条
 
 # 3. 从 Planetary Computer 抓真实影像（不需要账号），落到本地
 ./.venv/Scripts/python.exe -m glof.cli fetch \
@@ -119,7 +143,25 @@ python -m venv .venv
     --input output/kyagar/kyagar_area_series.csv --lake-type ice \
     --sensitivity --out output/risk
 
-# 8. 启动界面（QML 主窗口：左参数面板 + 地图 + 时序曲线/风险表）
+# 8. 从 DEM 自动估坝体位置再量下游坡度（替掉"拿湖心当坝体"）
+./.venv/Scripts/python.exe -m glof.cli risk \
+    --input output/kyagar/kyagar_area_series.csv --lake-type ice \
+    --dem "https://copernicus-dem-30m.s3.amazonaws.com/.../Copernicus_DSM_COG_10_N35_00_E077_00_DEM.tif" \
+    --dam-position --lakes output/run1/lakes.geojson --out output/risk
+
+# 9. 最新可用观测（拉最近一景，界面里会把影像直接上地图）
+./.venv/Scripts/python.exe -m glof.cli latest --bbox 77.16 35.65 77.22 35.71 --days 60
+
+# 10. 暴露度（**需自备矢量数据**，本项目不内置地理数据）
+./.venv/Scripts/python.exe -m glof.cli exposure \
+    --lakes output/run1/lakes.geojson --roads <道路.geojson> --buffer-km 5
+
+# 11. 汇总成报告（Markdown + 自包含 HTML，无新依赖）
+./.venv/Scripts/python.exe -m glof.cli report \
+    --lakes output/run1/lakes.geojson --accuracy output/eval/accuracy.json \
+    --out output/report
+
+# 12. 启动界面（QML 主窗口：左参数面板 + 地图 + 时序曲线/风险表）
 ./.venv/Scripts/python.exe -m glof.ui --input data/kyagar/S2A_MSIL2A_20250930T054251_R005_T43SGV_20250930T083759.tif
 ```
 
@@ -140,36 +182,47 @@ glof/
 │   ├── indices.py   光谱指数 + 波段约定
 │   ├── masks.py     冰雪 / 云 / 地形阴影掩膜
 │   ├── water.py     阈值 + 形态学 + 矢量化 + 面积统计
-│   ├── io.py        栅格读取（逐波段重采样）、落盘
+│   ├── io.py        栅格读取（逐波段重采样）、落盘 / 读回
 │   ├── stac.py      STAC 检索 + SAS 签名（PC / CDSE 资产名映射）
 │   ├── inventory.py ICIMOD HMA GLOF 事件库读取、聚类、按研究区筛选
 │   ├── risk.py      分坝型溃决风险分级（可审计规则，无权重）+ 阈值敏感性
-│   ├── risk_series.py 时序 → 风险：CSV 读入、留出法参照、逐期判定（CLI `risk` 与界面共用）
+│   ├── risk_series.py 时序 → 风险：CSV 读入、留出法参照、逐期判定
 │   ├── timeseries.py 时序 API：build_series / 平台面积（口径转发 risk）
-│   ├── synthetic.py 合成测试影像（仅测试用）
-├── cli.py           无界面批量入口（info / fetch / inventory / extract）
-├── core/accuracy.py   点位匹配、混淆矩阵、球面多边形 IoU（纯几何，不碰 rasterio）
-├── core/terrain.py    DEM 坡度、坝体下游坡度、Copernicus 瓦片读取
-├── core/evalwindows.py 评估窗口读取与逐窗提取（口径与产品一致）
-├── cli.py            无界面批量入口（info / fetch / inventory / extract / risk / accuracy）
-├── ui/               界面层（QML，只允许调用 core 的公开接口）
-│   ├── app_state.py  装配与长任务派发
+│   ├── latest.py    最新可用观测：选最近一景、质量闸门、带影像返回
+│   ├── accuracy.py  点位匹配、混淆矩阵、球面多边形 IoU（纯几何）
+│   ├── terrain.py   DEM 坡度、坝体下游坡度、Copernicus 瓦片读取
+│   ├── dam_position.py 坝体位置估计（湖边界最低点），替掉"用湖心当坝体"
+│   ├── exposure.py  暴露度：湖到最近道路/居民点的球面距离
+│   ├── report.py    报告导出：Markdown + 自包含 HTML（无新依赖）
+│   ├── evalwindows.py 评估窗口读取与逐窗提取（口径与产品一致）
+│   └── synthetic.py 合成测试影像（仅测试用）
+├── cli.py           无界面入口（9 个子命令，见下）
+├── ui/              界面层（QML，只允许调用 core 的公开接口）
+│   ├── app_state.py 装配与长任务派发
+│   ├── worker.py    ExtractWorker / SeriesWorker / LatestWorker（QThread）
 │   ├── map_controller.py / lake_model.py / series_controller.py
-│   └── qml/          Main / MapView / SeriesChart / LakeTable
+│   ├── image_provider.py / imagery.py  栅格 → QPixmap
+│   └── qml/         Main / MapView / SeriesChart / LakeTable
 scripts/
-├── verify_pipeline.py    提取精度验证（12 条断言）
-├── verify_resampling.py  逐波段重采样验证（14 条断言）
-├── verify_risk.py        风险分级验证（25 条断言，含敏感性分析）
-├── verify_risk_series.py 时序→风险链路验证（23 条断言）
-├── verify_accuracy.py    精度评价模块验证（48 条断言）
-├── verify_terrain.py     DEM 坡度验证（39 条断言，含真实 Copernicus 用例）
-├── verify_event_years.py ICIMOD 点位画像验证（12 条断言）
-├── fetch_eval_windows.py 55 个溃决湖点位 → Sentinel-2 小窗口（评价数据集）
-├── ui_spike.py           界面性能 gate（4 条判定）
-├── smoke_ui_*.py         QML 冒烟（地图 26 / 时序 / 风险表 35 / 主窗口 54）
-├── kyagar_series.py      克亚吉尔年际时序（业务参数 + 出图）
-├── kyagar_dense.py       2018 溃决前加密时序
-├── preview_scene.py      真彩色 + NDWI 预览图，用于肉眼核对
+├── verify_pipeline.py       提取精度验证（12 条断言）
+├── verify_resampling.py     逐波段重采样验证（14 条断言）
+├── verify_risk.py           风险分级验证（25 条断言，含敏感性分析）
+├── verify_risk_series.py    时序→风险链路验证（23 条断言）
+├── verify_accuracy.py       精度评价模块验证（48 条断言）
+├── verify_terrain.py        DEM 坡度验证（39 条断言，含真实 Copernicus 用例）
+├── verify_dam_position.py   坝体位置验证（43 条，含"坝体 vs 湖心"对比）
+├── verify_exposure.py       暴露度验证（64 条，全合成 GeoJSON）
+├── verify_report.py         报告导出验证（含 UNKNOWN/None 措辞）
+├── verify_latest.py         最新观测验证（82 条，--live 含实网）
+├── verify_series_progress.py 时序进度与取消验证（13 条）
+├── verify_cli_wiring.py     CLI 接线验证（40 条，三个新命令的错误路径）
+├── verify_event_years.py    ICIMOD 点位画像验证（12 条断言）
+├── fetch_eval_windows.py    55 个溃决湖点位 → Sentinel-2 小窗口
+├── ui_spike.py              界面性能 gate（4 条判定）
+├── smoke_ui_*.py            QML 冒烟（app 55 / map 26 / table 35 / series / latest 42）
+├── kyagar_series.py         克亚吉尔年际时序（业务参数 + 出图）
+├── kyagar_dense.py          2018 溃决前加密时序
+├── preview_scene.py         真彩色 + NDWI 预览图，用于肉眼核对
 └── capture_gui.py        截取运行中的窗口（答辩存证用）
 ```
 
