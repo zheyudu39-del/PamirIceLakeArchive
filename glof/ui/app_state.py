@@ -49,7 +49,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from glof.core.inventory import DEFAULT_DB_PATH, lake_profile
 from glof.core.latest import (
@@ -412,6 +412,45 @@ class AppState(QObject):
             self._selected_risk = ""  # 换选中：旧判据摘要作废，等下一次时序判定
             self.selectedLakeRiskChanged.emit()
         self.selectedLakeChanged.emit()
+
+    @Slot("QUrl", result=str)
+    def pathFromUrl(self, url: Any) -> str:
+        """文件对话框选中的 QUrl → 面板里显示/提取时用的本地路径。
+
+        为什么不让 QML 自己 `url.toString()` 再删 `file://`（实测，Qt 6.12）：
+
+        - Windows 上会留下盘符前的**前导斜杠**：``/C:/data/a.tif``，
+          这不是合法 Windows 路径，rasterio 直接打不开；
+        - 文件名里的 ``#`` ``?`` ``%`` 会保持百分号转义（``a%23b.tif``），
+          还原不回去。中文和空格反而不转义——所以拿中文当例子会误判，
+          真正会断的是上面两种。
+
+        QUrl.toLocalFile() 一次解决这两件事。非本地 URL（如 http://）它
+        返回空串，这里退回原串，让下游 ``_resolve_input_path`` 如实报
+        "找不到文件"，而不是猜一个本地路径。
+
+        Windows 路径统一成正斜杠：面板里显示干净，rasterio 也认。
+        """
+        if not isinstance(url, QUrl):
+            url = QUrl(str(url))
+        local = url.toLocalFile()
+        if not local:
+            return url.toString()
+        return str(Path(local).as_posix())
+
+    @Slot(result="QUrl")
+    def defaultInputDir(self) -> QUrl:
+        """文件对话框的起始目录：默认影像所在目录，找不到就退回项目根。
+
+        不给目录时 Qt 会打开"上次访问的位置"或用户主目录，用户还得自己
+        一层层点到 data/kyagar。这里直接落到契约素材旁边，打开就能选。
+
+        返回 QUrl 而不是 str：目录名里可能有中文或空格，拼 "file:///" 字符串
+        要自己处理百分号转义，漏一个就打开失败。QUrl.fromLocalFile 负责编码。
+        """
+        resolved = self._resolve_input_path(self._default_input)
+        folder = resolved.parent if resolved is not None else PROJECT_ROOT
+        return QUrl.fromLocalFile(str(folder))
 
     @Slot()
     def cancelSeries(self) -> None:

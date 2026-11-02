@@ -35,6 +35,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import "."
 import "components"
@@ -234,13 +235,33 @@ ApplicationWindow {
                         font.pixelSize: Theme.fontCaption
                         color: Theme.textSecondary
                     }
-                    StyledField {
-                        id: inputField
-                        objectName: "inputField"
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: app.defaultInput
-                        font.pixelSize: Theme.fontCaption
-                        implicitHeight: 28
+                        spacing: Theme.gapSm
+
+                        StyledField {
+                            id: inputField
+                            objectName: "inputField"
+                            Layout.fillWidth: true
+                            text: app.defaultInput
+                            font.pixelSize: Theme.fontCaption
+                            implicitHeight: 28
+                            placeholderText: "直接粘贴路径，或点右侧「浏览…」"
+                        }
+
+                        // 「浏览…」用 secondary 而不是 primary：这个区块唯一的
+                        // 主操作是「提取湖泊」，两个实心按钮会抢注意力。
+                        StyledButton {
+                            id: browseButton
+                            objectName: "browseButton"
+                            variant: "secondary"
+                            compact: true
+                            text: "浏览…"
+                            implicitHeight: 28
+                            Layout.alignment: Qt.AlignVCenter
+                            enabled: !app.busyExtract && !app.busySeries
+                            onClicked: fileDialog.open()
+                        }
                     }
 
                     RowLayout {
@@ -853,6 +874,36 @@ ApplicationWindow {
                 elide: Text.ElideRight
                 Layout.maximumWidth: 420
             }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 选影像：打开系统文件对话框
+    // ------------------------------------------------------------------
+    // 用 QtQuick.Dialogs 的 FileDialog 而不是 Python 侧 QFileDialog：
+    // 前者是 QML 原生对话框，走同一套主题；后者要再从 Python 回调改 QML
+    // 文本，多一层跨语言往返，且 offscreen 冒烟下更容易挂。
+    //
+    // 只列 .tif/.tiff，但保留「所有文件」——用户手上的多波段 GeoTIFF 不一定
+    // 是这个后缀。选完不在这里校验能不能读：读不了由提取流程如实报错，
+    // 比对话框里猜一个"文件无效"更准确。
+    FileDialog {
+        id: fileDialog
+        objectName: "fileDialog"
+        title: "选择 Sentinel-2 影像"
+        // 起始目录落到契约素材旁边（见 AppState.defaultInputDir）。
+        // Qt 6 的属性名是 currentFolder；Qt 5 的 folder 在这里不存在，
+        // 写了会直接 "Cannot assign to non-existent property" 加载失败。
+        currentFolder: app.defaultInputDir()
+        nameFilters: [
+            "Sentinel-2 / GeoTIFF 影像 (*.tif *.tiff *.vrt)",
+            "所有文件 (*)"
+        ]
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            // 转本地路径的活交给 Python：QML 自己删 "file://" 会留下
+            // 中文/空格的百分号转义，rasterio 拿到的是个不存在的文件名。
+            inputField.text = app.pathFromUrl(selectedFile)
         }
     }
 
