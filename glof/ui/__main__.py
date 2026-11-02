@@ -59,6 +59,7 @@ from glof.core.inventory import lake_profile  # noqa: E402
 from glof.core.timeseries import SeriesPoint  # noqa: E402
 from glof.ui.app_state import DEFAULT_INPUT, AppState  # noqa: E402
 from glof.ui.image_provider import RasterImageProvider  # noqa: E402
+from glof.ui.texture_provider import TerrainTextureProvider  # noqa: E402
 from glof.ui.style import risk_color  # noqa: E402
 
 QML_DIR = Path(__file__).resolve().parent / "qml"
@@ -480,7 +481,13 @@ def main(argv: list[str] | None = None) -> int:
     provider = RasterImageProvider()
     engine.addImageProvider(RasterImageProvider.PROVIDER_ID, provider)
 
-    state = AppState(provider, default_input=args.input)
+    # 3D 地形贴图提供器。软件渲染后端不消费 ProceduralMesh 的 normals/colors
+    # 顶点属性（实测有法线和没法线逐像素一致），山体明暗改走贴图。
+    terrain_texture = TerrainTextureProvider()
+    engine.addImageProvider(TerrainTextureProvider.PROVIDER_ID, terrain_texture)
+
+    state = AppState(provider, default_input=args.input,
+                     terrain_texture=terrain_texture)
     engine.rootContext().setContextProperty("app", state)
 
     engine.load(QUrl.fromLocalFile(str(QML_DIR / "Main.qml")))

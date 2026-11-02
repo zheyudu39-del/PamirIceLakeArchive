@@ -63,6 +63,7 @@ from glof.core.timeseries import SeriesPoint, estimate_plateau
 from glof.core.water import LakeRecord
 from glof.ui.lake_model import LakeModel
 from glof.ui.map_controller import MapController
+from glof.ui.lake3d_controller import Lake3DController, build_terrain_grid
 from glof.ui.series_controller import SeriesController
 from glof.ui.worker import ExtractWorker, LatestWorker, SeriesWorker
 
@@ -74,6 +75,11 @@ __all__ = [
 #: 项目根目录（glof/ui/app_state.py 向上三级）。相对路径的影像若按 CWD 找不到，
 #: 再按它找一遍——QML/快捷方式启动时 CWD 不一定是项目根。
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+#: 3D 回放取 DEM 的窗口半宽（度）。0.05° ≈ 5.5 km，覆盖 Kyagar 湖盆
+#: 与周围山体；实测该窗口下 DEM 为 648×720，湖心周围 80 像元建出的
+#: 水位—面积曲线在满蓄处与实测平台吻合到 0.0004 km²。
+DEM_PAD_DEG = 0.05
 
 #: 默认影像（契约素材）。作为命令行缺省值与 QML 输入框的初始文本。
 DEFAULT_INPUT = "data/kyagar/S2A_MSIL2A_20250930T054251_R005_T43SGV_20250930T083759.tif"
@@ -203,11 +209,15 @@ class AppState(QObject):
         provider: Any,
         parent: QObject | None = None,
         default_input: str = DEFAULT_INPUT,
+        terrain_texture: Any = None,
     ) -> None:
         super().__init__(parent)
+        # 3D 地形贴图提供器（可选）。不传时 3D 视图退回纯色材质。
+        self._terrain_texture = terrain_texture
         # 三个子模块互不知晓彼此，联动（表↔图↔曲线）全在本类与 QML 装配层完成
         self._map = MapController(provider, self)
         self._series = SeriesController(self)
+        self._lake3d = Lake3DController(self)
         self._lakes = LakeModel(self)
         self._default_input = str(default_input)
 
@@ -244,6 +254,9 @@ class AppState(QObject):
 
     def _get_series(self) -> QObject:
         return self._series
+
+    def _get_lake3d(self) -> QObject:
+        return self._lake3d
 
     def _get_lakes(self) -> QObject:
         return self._lakes
@@ -299,6 +312,7 @@ class AppState(QObject):
 
     map = Property(QObject, _get_map, constant=True)  # noqa: N815 (QML 命名)
     series = Property(QObject, _get_series, constant=True)
+    lake3d = Property(QObject, _get_lake3d, constant=True)  # noqa: N815
     lakes = Property(QObject, _get_lakes, constant=True)
     defaultInput = Property(str, _get_default_input, constant=True)
     latestLookbackDays = Property(int, _get_latest_lookback_days, constant=True)
@@ -635,7 +649,76 @@ class AppState(QObject):
 
         # ---- d) 曲线数据 ----
         self._series.set_series(pts, plateau, event_years=event_years)
+
+        # ---- e) 3D 回放：同一串实测面积，换一种表达 ----
+        # 放在最后且单独兜住异常：3D 是附加视图，它挂了不该让曲线和风险
+        # 判定一起失败（前四步已经各自 emit 完变更信号）。
+        if rec is not None:
+            try:
+                self._rebuild_lake3d(rec.centroid_lat, rec.centroid_lon, pts)
+            except Exception as exc:  # noqa: BLE001 - 附加视图，不能拖垮主流程
+                self._lake3d.clear()
+                self._lake3d._set_message(f"3D 回放不可用：{type(exc).__name__}: {exc}")
         return plateau
+
+    def _rebuild_lake3d(self, lat: float, lon: float, pts: list[SeriesPoint]) -> None:
+        """按湖心取 DEM，建水位—面积曲线，把每期面积换成水位。
+
+        DEM 走 ``terrain.read_dem_bounds(None, bbox)``：免账号的 Copernicus
+        GLO-30 远程 COG，按 bbox 只读窗口。网络不通时抛异常，由调用方
+        兜住并清空 3D 视图——不在缺 DEM 时假装有地形。
+
+        窗口半宽用 ``DEM_PAD_DEG``（0.05°）：实测 Kyagar 在这个窗口下
+        DEM 是 648×720，取湖心周围 80 像元建曲线，满蓄面积与实测平台
+        吻合到 0.0004 km²（见 ``lake_3d.build_level_area_curve``）。
+        """
+        from glof.core import terrain as gterrain
+        from glof.core.lake_3d import build_level_area_curve
+        from rasterio.transform import rowcol
+
+        pad = DEM_PAD_DEG
+        bbox = (lon - pad, lat - pad, lon + pad, lat + pad)
+        dem, transform = gterrain.read_dem_bounds(None, bbox)
+        if dem is None or dem.size == 0:
+            self._lake3d.clear()
+            self._lake3d._set_message("3D 回放不可用：DEM 窗口为空")
+            return
+
+        row, col = rowcol(transform, lon, lat)
+        if not (0 <= row < dem.shape[0] and 0 <= col < dem.shape[1]):
+            self._lake3d.clear()
+            self._lake3d._set_message("3D 回放不可用：湖心不在 DEM 窗口内")
+            return
+
+        curve = build_level_area_curve(dem, transform, (int(row), int(col)),
+                                       lat_mid=float(lat))
+        if not curve.valid:
+            self._lake3d.clear()
+            self._lake3d._set_message(f"3D 回放不可用：{curve.source or '水位曲线无效'}")
+            return
+
+        grid = build_terrain_grid(dem)
+        # 烘山体阴影贴图。软件渲染后端不消费 ProceduralMesh 的 normals/colors
+        # 顶点属性（实测有法线和没法线两张截图逐像素一致），贴图是可靠路径。
+        texture_url = ""
+        if self._terrain_texture is not None:
+            try:
+                from glof.ui.terrain_texture import make_terrain_image
+
+                self._terrain_texture.set_image(make_terrain_image(dem))
+                texture_url = f"image://{self._terrain_texture.PROVIDER_ID}/" \
+                              + self._terrain_texture.bump()
+            except Exception:  # noqa: BLE001 - 贴图失败只影响观感，不影响数据
+                texture_url = ""
+        # 湖心在网格里的归一化位置：QML 据此把湖面放到正确谷底
+        seed_x = float(col) / max(1, dem.shape[1])
+        seed_y = float(row) / max(1, dem.shape[0])
+        self._lake3d.set_terrain(grid, texture_url, (seed_x, seed_y))
+        self._lake3d.set_frames(
+            [p.date for p in pts],
+            [p.area_km2 for p in pts],
+            curve,
+        )
 
     def _on_series_failed(self, message: str) -> None:
         self._set_busy_series(False)

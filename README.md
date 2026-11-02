@@ -121,7 +121,8 @@ python -m venv .venv
 ./.venv/Scripts/python.exe scripts/smoke_ui_table.py          # 风险表 35 条
 ./.venv/Scripts/python.exe scripts/smoke_ui_series.py         # 时序 + 线程
 ./.venv/Scripts/python.exe scripts/smoke_ui_latest.py         # 最新观测 42 条
-./.venv/Scripts/python.exe scripts/smoke_ui_filepicker.py     # 选影像对话框 23 条
+./.venv/Scripts/python.exe scripts/smoke_ui_filepicker.py     # 选影像对话框 25 条
+./.venv/Scripts/python.exe scripts/smoke_ui_lake3d.py         # 3D 湖面回放 50 条
 
 # 3. 从 Planetary Computer 抓真实影像（不需要账号），落到本地
 ./.venv/Scripts/python.exe -m glof.cli fetch \

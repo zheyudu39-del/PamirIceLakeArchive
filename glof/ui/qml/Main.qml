@@ -804,6 +804,32 @@ ApplicationWindow {
                             }
                         }
                     }
+                    TabButton {
+                        objectName: "tabLake3D"
+                        text: "3D 回放"
+                        implicitHeight: 38
+                        implicitWidth: 108
+
+                        contentItem: Text {
+                            text: parent.text
+                            font.pixelSize: Theme.fontBody
+                            font.bold: parent.checked
+                            color: parent.checked ? Theme.accent : Theme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Item {
+                            Rectangle {
+                                anchors.bottom: parent.bottom
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: parent.width * (parent.parent.checked ? 0.72 : 0)
+                                height: 2
+                                radius: 1
+                                color: Theme.accent
+                                Behavior on width { NumberAnimation { duration: 140 } }
+                            }
+                        }
+                    }
                 }
 
                 StackLayout {
@@ -813,6 +839,7 @@ ApplicationWindow {
 
                     SeriesChart { objectName: "seriesChart" }
                     LakeTable { id: table; objectName: "lakeTable" }
+                    Lake3DPage { objectName: "lake3dPage" }
                 }
             }
         }
