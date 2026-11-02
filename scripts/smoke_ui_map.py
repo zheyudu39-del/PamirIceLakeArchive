@@ -135,6 +135,16 @@ def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     app = QGuiApplication([])
+    # 尽量与真实运行一致（glof/ui/__main__.py 用 Fusion）。QQuickStyle 需要
+    # QApplication，这里只有 QGuiApplication，失败就保持原生样式——
+    # 本脚本断言的是地图/表格组件的几何与联动，不依赖控件外观。
+    try:
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtQuickControls2 import QQuickStyle
+        if QApplication.instance() is not None:
+            QQuickStyle.setStyle("Fusion")
+    except Exception:
+        pass
 
     # ------------------------------------------------------------------
     # 阶段 1：最小 hello QML，验证 QML 工具链本身可用

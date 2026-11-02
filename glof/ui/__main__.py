@@ -50,6 +50,7 @@ import shiboken6  # noqa: E402
 from PySide6.QtCore import (QCoreApplication, QEvent, QEventLoop, QObject,  # noqa: E402
                             QPoint, QTimer, Qt, QUrl)
 from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+from PySide6.QtQuickControls2 import QQuickStyle  # noqa: E402
 from PySide6.QtQuick import QQuickWindow  # noqa: E402
 from PySide6.QtTest import QSignalSpy, QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -463,6 +464,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     app = QApplication.instance() or QApplication(sys.argv)
+
+    # QML 控件样式必须显式设成 Fusion。
+    # Windows 原生样式（windowsvista）**不支持定制 background/contentItem**，
+    # 会给每个 Button/TextField 打 "The current style does not support
+    # customization of this control"，界面保持系统灰、自绘样式全部失效。
+    # Fusion 是 Qt 自带的跨平台样式，支持完整定制，且各平台表现一致。
+    # 必须在建 QQmlApplicationEngine **之前**设置。
+    QQuickStyle.setStyle("Fusion")
 
     engine = QQmlApplicationEngine()
     engine.warnings.connect(

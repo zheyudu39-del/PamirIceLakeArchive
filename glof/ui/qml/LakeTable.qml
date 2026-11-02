@@ -8,6 +8,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "."
 
 Item {
     id: root
@@ -143,6 +144,35 @@ Item {
             id: header
             Layout.fillWidth: true
             syncView: tableView
+
+            // 表头自绘：原生表头是灰底深色字、无分隔，和白色卡片混在一起
+            // 分不出哪里是表头。改成浅灰底 + 加粗小字 + 底部实线。
+            delegate: Rectangle {
+                required property var model
+                implicitHeight: 32
+                color: "#f4f6f8"
+
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: 1
+                    color: Theme.panelBorder
+                }
+
+                Text {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    verticalAlignment: Text.AlignVCenter
+                    horizontalAlignment: root.numericColumns.indexOf(model.column) >= 0
+                                         ? Text.AlignRight : Text.AlignLeft
+                    text: model.display
+                    font.pixelSize: Theme.fontCaption
+                    font.bold: true
+                    color: Theme.textSecondary
+                    elide: Text.ElideRight
+                }
+            }
         }
 
         TableView {

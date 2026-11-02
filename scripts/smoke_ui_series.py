@@ -46,7 +46,8 @@ os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 from PySide6.QtCore import Property, QObject, QUrl  # noqa: E402
 from PySide6.QtQuick import QQuickView  # noqa: E402
 from PySide6.QtTest import QSignalSpy  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication
+from PySide6.QtQuickControls2 import QQuickStyle  # noqa: E402
 import shiboken6  # noqa: E402
 
 from glof.core.timeseries import SeriesPoint, estimate_plateau  # noqa: E402
@@ -182,6 +183,8 @@ def probe_qtcharts(app: QApplication) -> float:
 
 def main() -> int:
     app = QApplication.instance() or QApplication([])
+    # 与 glof/ui/__main__.py 一致：原生样式不支持控件定制
+    QQuickStyle.setStyle("Fusion")
 
     # ---- 步骤 1：QtCharts 探针（最大风险点，先验证） ----
     probe_qtcharts(app)

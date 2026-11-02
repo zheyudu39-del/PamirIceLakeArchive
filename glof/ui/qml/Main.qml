@@ -1,4 +1,4 @@
-// 主窗口装配：左参数面板 + 中间地图 + 底部"面积时序 / 湖泊列表"切换 + 状态栏。
+// 主窗口装配：左侧参数面板 + 中间地图 + 底部"面积时序 / 湖泊列表"切换 + 状态栏。
 //
 // 装配契约（与 glof/ui/app_state.py 对齐）：
 //   * 上下文属性 app（AppState）：app.map / app.series / app.lakes 三个子对象，
@@ -23,6 +23,12 @@
 // QtQuick.Controls 全 6.x 可用、行为一致；且 StackLayout 的两个孩子从加载起
 // 就实例化——地图↔表格的联动不依赖用户先切过页签。
 //
+// 视觉结构（2026-11-03 改版）：
+//   顶栏（应用名 + 副标题 + 全局状态） / 左面板（三段卡片） / 中地图 / 底部分页。
+//   颜色与间距全部来自 Theme.qml 单例，不在这里写死色值——改版前 4 个 QML 里
+//   散着 20+ 个硬编码色值，改一处配色要全文搜索还必然漏。
+//   **所有 objectName 与绑定保持原样**，冒烟脚本依赖它们。
+//
 // 参数默认值与 data/kyagar 契约素材一致。诚实提示：该景（2025-09-30 小景）
 // NDWI 最高约 0.167，阈值 0.15 下提出 0 条是正常结果，面板上写明而不是让
 // 用户以为程序坏了。
@@ -30,18 +36,20 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "."
+import "components"
 
 ApplicationWindow {
     id: window
 
     objectName: "mainWindow"
-    width: 1360
-    height: 840
+    width: 1440
+    height: 900
     minimumWidth: 1100
     minimumHeight: 700
     visible: true
     title: "帕米尔冰湖档案"
-    color: "#f1f3f4"
+    color: Theme.windowBg
 
     // ---- 状态栏文本（Connections 里回填，见文件底部） ----
     property string coordText: "悬停：—"
@@ -49,41 +57,148 @@ ApplicationWindow {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 8
+        spacing: 0
 
-        // ---- progressText / lastError 横幅：有错误显示错误（红底），否则显示进度 ----
+        // ================================================================
+        // 顶栏：应用标识 + 全局进度/错误
+        // ================================================================
         Rectangle {
-            objectName: "banner"
             Layout.fillWidth: true
-            implicitHeight: bannerLabel.implicitHeight + 16
-            radius: 4
-            visible: app.lastError !== "" || app.progressText !== ""
-            color: app.lastError !== "" ? "#fdecea" : "#e8f0fe"
+            Layout.preferredHeight: 56
+            color: Theme.panelBg
 
-            Text {
-                id: bannerLabel
+            // 顶栏下沿细线，把标题区和内容区分开
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: Theme.panelBorder
+            }
+
+            RowLayout {
                 anchors.fill: parent
-                anchors.margins: 8
-                verticalAlignment: Text.AlignVCenter
-                wrapMode: Text.Wrap
-                text: app.lastError !== "" ? app.lastError : app.progressText
-                color: app.lastError !== "" ? "#b3261e" : "#1a56b0"
-                font.pixelSize: 13
+                anchors.leftMargin: Theme.gapLg
+                anchors.rightMargin: Theme.gapLg
+                spacing: Theme.gapMd
+
+                // 应用图标：一个抽象的湖面 + 山峰，纯几何绘制，不引外部资源
+                Item {
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.preferredWidth: 28
+                    Layout.preferredHeight: 28
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 7
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: Theme.accent }
+                            GradientStop { position: 1.0; color: "#1e40af" }
+                        }
+                    }
+                    // 山峰：两个三角形
+                    Canvas {
+                        anchors.centerIn: parent
+                        width: 20
+                        height: 16
+                        onPaint: {
+                            var ctx = getContext("2d");
+                            ctx.reset();
+                            ctx.fillStyle = "#ffffff";
+                            // 左峰
+                            ctx.beginPath();
+                            ctx.moveTo(2, 14);
+                            ctx.lineTo(8, 3);
+                            ctx.lineTo(13, 14);
+                            ctx.closePath();
+                            ctx.fill();
+                            // 右峰（略矮，压在山脊后）
+                            ctx.globalAlpha = 0.72;
+                            ctx.beginPath();
+                            ctx.moveTo(10, 14);
+                            ctx.lineTo(15, 7);
+                            ctx.lineTo(19, 14);
+                            ctx.closePath();
+                            ctx.fill();
+                        }
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: 0
+
+                    Text {
+                        text: "帕米尔冰湖档案"
+                        font.pixelSize: Theme.fontTitle
+                        font.bold: true
+                        color: Theme.textPrimary
+                    }
+                    Text {
+                        text: "冰湖识别 · 溃决风险筛查 · 可审计"
+                        font.pixelSize: Theme.fontCaption
+                        color: Theme.textMuted
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // 全局状态胶囊：有错误变红，有进度变蓝，都没有则隐藏。
+                // 替代改版前横跨整个窗口的横幅——横幅会挤压布局，且在
+                // 没有消息时占一行空白。
+                Rectangle {
+                    objectName: "banner"
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: app.lastError !== "" || app.progressText !== ""
+                    implicitWidth: Math.min(bannerLabel.implicitWidth + 28, 520)
+                    implicitHeight: 30
+                    radius: 15
+                    color: app.lastError !== "" ? Theme.dangerSoft : Theme.accentSoft
+                    border.width: 1
+                    border.color: app.lastError !== "" ? "#f5c2bd" : "#c6dafc"
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 12
+                        spacing: 6
+
+                        // 状态点
+                        Rectangle {
+                            Layout.alignment: Qt.AlignVCenter
+                            width: 7
+                            height: 7
+                            radius: 3.5
+                            color: app.lastError !== "" ? Theme.danger : Theme.accent
+                        }
+
+                        Text {
+                            id: bannerLabel
+                            Layout.fillWidth: true
+                            Layout.alignment: Qt.AlignVCenter
+                            elide: Text.ElideRight
+                            text: app.lastError !== "" ? app.lastError : app.progressText
+                            color: app.lastError !== "" ? Theme.danger : Theme.accentPressed
+                            font.pixelSize: Theme.fontBody
+                        }
+                    }
+                }
             }
         }
 
+        // ================================================================
+        // 主区：左面板 + 地图
+        // ================================================================
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 8
+            Layout.margins: Theme.gapMd
+            spacing: Theme.gapMd
 
             // ---- 左：参数面板 ----
-            Rectangle {
-                Layout.preferredWidth: 330
+            Card {
+                Layout.preferredWidth: Theme.panelWidth
                 Layout.fillHeight: true
-                color: "white"
-                radius: 6
+                padding: 0
 
                 // 面板内容比窗口高时（最小窗口 1100×700 实测）必须能滚：
                 // 直接 ColumnLayout 会把"最新观测"整段裁在可视区外，
@@ -92,7 +207,7 @@ ApplicationWindow {
                     id: panelFlick
                     objectName: "panelFlick"
                     anchors.fill: parent
-                    anchors.margins: 12
+                    anchors.margins: Theme.gapMd
                     contentWidth: width
                     contentHeight: Math.max(panelColumn.implicitHeight, height)
                     clip: true
@@ -105,324 +220,533 @@ ApplicationWindow {
                         // 底部的弹性占位继续把提示顶到面板底部（原行为）。
                         width: panelFlick.width - 12
                         height: Math.max(implicitHeight, panelFlick.height)
-                        spacing: 8
+                        spacing: Theme.gapSm
 
-                    Label {
-                        text: "影像提取"
-                        font.bold: true
-                        font.pixelSize: 14
-                        color: "#202124"
+                    // ---- 区块 1：影像提取 ----
+                    SectionHeader {
+                        Layout.topMargin: 2
+                        title: "影像提取"
+                        subtitle: "本地 Sentinel-2 影像 → 湖泊清单"
                     }
 
-                    Label { text: "影像路径"; font.pixelSize: 12; color: "#5f6368" }
-                    TextField {
+                    Text {
+                        text: "影像路径"
+                        font.pixelSize: Theme.fontCaption
+                        color: Theme.textSecondary
+                    }
+                    StyledField {
                         id: inputField
                         objectName: "inputField"
                         Layout.fillWidth: true
                         text: app.defaultInput
-                        selectByMouse: true
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontCaption
+                        implicitHeight: 28
                     }
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label {
-                            text: "NDWI 阈值"
-                            font.pixelSize: 12
-                            color: "#5f6368"
+                        spacing: Theme.gapSm
+
+                        ColumnLayout {
                             Layout.fillWidth: true
+                            spacing: 2
+                            Text {
+                                text: "NDWI 阈值"
+                                font.pixelSize: Theme.fontCaption
+                                color: Theme.textSecondary
+                            }
+                            StyledField {
+                                id: thresholdField
+                                objectName: "thresholdField"
+                                Layout.fillWidth: true
+                                text: "0.15"
+                                horizontalAlignment: TextInput.AlignRight
+                            }
                         }
-                        TextField {
-                            id: thresholdField
-                            objectName: "thresholdField"
-                            text: "0.15"
-                            Layout.preferredWidth: 80
-                            selectByMouse: true
-                        }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            text: "最小面积 km²"
-                            font.pixelSize: 12
-                            color: "#5f6368"
+                        ColumnLayout {
                             Layout.fillWidth: true
-                        }
-                        TextField {
-                            id: minAreaField
-                            objectName: "minAreaField"
-                            text: "0.005"
-                            Layout.preferredWidth: 80
-                            selectByMouse: true
+                            spacing: 2
+                            Text {
+                                text: "最小面积 km²"
+                                font.pixelSize: Theme.fontCaption
+                                color: Theme.textSecondary
+                            }
+                            StyledField {
+                                id: minAreaField
+                                objectName: "minAreaField"
+                                Layout.fillWidth: true
+                                text: "0.005"
+                                horizontalAlignment: TextInput.AlignRight
+                            }
                         }
                     }
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Button {
+                        spacing: Theme.gapSm
+
+                        StyledButton {
                             id: extractButton
                             objectName: "extractButton"
+                            variant: "primary"
                             text: "提取湖泊"
+                            Layout.fillWidth: true
                             enabled: !app.busyExtract && !app.busySeries
                             onClicked: app.extract(inputField.text,
                                                    Number(thresholdField.text),
                                                    Number(minAreaField.text))
                         }
-                        BusyIndicator { running: app.busyExtract; visible: running }
-                        Item { Layout.fillWidth: true }
+                        BusyIndicator {
+                            running: app.busyExtract
+                            visible: running
+                            implicitWidth: 26
+                            implicitHeight: 26
+                        }
                     }
 
                     // 分隔线
-                    Rectangle { Layout.fillWidth: true; height: 1; color: "#e8eaed" }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.topMargin: Theme.gapSm
+                        height: 1
+                        color: Theme.divider
+                    }
 
-                    Label {
-                        text: "时序检索（联网，分钟级）"
-                        font.bold: true
-                        font.pixelSize: 14
-                        color: "#202124"
+                    // ---- 区块 2：时序检索 ----
+                    SectionHeader {
+                        Layout.topMargin: Theme.gapSm
+                        title: "时序检索"
+                        subtitle: "逐年联网取景，看湖面积怎么变"
                     }
 
                     GridLayout {
                         Layout.fillWidth: true
-                        columns: 4
-                        columnSpacing: 6
-                        rowSpacing: 4
+                        columns: 2
+                        columnSpacing: Theme.gapSm
+                        rowSpacing: 6
 
-                        Label { text: "经度最小"; font.pixelSize: 12; color: "#5f6368" }
-                        TextField {
-                            id: x0Field
-                            objectName: "x0Field"
-                            text: "77.0249"
-                            Layout.preferredWidth: 78
-                            selectByMouse: true
+                        // 每个字段：上方小标签 + 下方输入框，纵向堆叠。
+                        // 改版前是 4 列横排（标签-框-标签-框），列宽被标签
+                        // 吃掉一半，输入框窄到看不清 77.0249 这种数。
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            Text {
+                                text: "经度范围"
+                                font.pixelSize: Theme.fontCaption
+                                color: Theme.textSecondary
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+                                StyledField {
+                                    id: x0Field
+                                    objectName: "x0Field"
+                                    Layout.fillWidth: true
+                                    text: "77.0249"
+                                    font.pixelSize: Theme.fontCaption
+                                    implicitHeight: 28
+                                    horizontalAlignment: TextInput.AlignRight
+                                }
+                                Text {
+                                    text: "–"
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.fontCaption
+                                }
+                                StyledField {
+                                    id: x1Field
+                                    objectName: "x1Field"
+                                    Layout.fillWidth: true
+                                    text: "77.3567"
+                                    font.pixelSize: Theme.fontCaption
+                                    implicitHeight: 28
+                                    horizontalAlignment: TextInput.AlignRight
+                                }
+                            }
                         }
-                        Label { text: "纬度最小"; font.pixelSize: 12; color: "#5f6368" }
-                        TextField {
-                            id: y0Field
-                            objectName: "y0Field"
-                            text: "35.5427"
-                            Layout.preferredWidth: 78
-                            selectByMouse: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            Text {
+                                text: "纬度范围"
+                                font.pixelSize: Theme.fontCaption
+                                color: Theme.textSecondary
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+                                StyledField {
+                                    id: y0Field
+                                    objectName: "y0Field"
+                                    Layout.fillWidth: true
+                                    text: "35.5427"
+                                    font.pixelSize: Theme.fontCaption
+                                    implicitHeight: 28
+                                    horizontalAlignment: TextInput.AlignRight
+                                }
+                                Text {
+                                    text: "–"
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.fontCaption
+                                }
+                                StyledField {
+                                    id: y1Field
+                                    objectName: "y1Field"
+                                    Layout.fillWidth: true
+                                    text: "35.8121"
+                                    font.pixelSize: Theme.fontCaption
+                                    implicitHeight: 28
+                                    horizontalAlignment: TextInput.AlignRight
+                                }
+                            }
                         }
-                        Label { text: "经度最大"; font.pixelSize: 12; color: "#5f6368" }
-                        TextField {
-                            id: x1Field
-                            objectName: "x1Field"
-                            text: "77.3567"
-                            Layout.preferredWidth: 78
-                            selectByMouse: true
-                        }
-                        Label { text: "纬度最大"; font.pixelSize: 12; color: "#5f6368" }
-                        TextField {
-                            id: y1Field
-                            objectName: "y1Field"
-                            text: "35.8121"
-                            Layout.preferredWidth: 78
-                            selectByMouse: true
-                        }
-                        Label { text: "起始年"; font.pixelSize: 12; color: "#5f6368" }
-                        TextField {
-                            id: year0Field
-                            objectName: "year0Field"
-                            // 默认 3 年而不是 10 年：实测单景 9–30 s、一年 15–25 个
-                            // 日期，10 年要跑半小时以上（docs/时序检索为什么慢.md）。
-                            // 默认值应该是"点下去能等到结果"的那个量级。
-                            text: "2023"
-                            Layout.preferredWidth: 78
-                            selectByMouse: true
-                        }
-                        Label { text: "结束年"; font.pixelSize: 12; color: "#5f6368" }
-                        TextField {
-                            id: year1Field
-                            objectName: "year1Field"
-                            text: "2025"
-                            Layout.preferredWidth: 78
-                            selectByMouse: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            Text {
+                                text: "年份范围"
+                                font.pixelSize: Theme.fontCaption
+                                color: Theme.textSecondary
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+                                StyledField {
+                                    id: year0Field
+                                    objectName: "year0Field"
+                                    // 默认 3 年而不是 10 年：实测单景 9–30 s、一年 15–25 个
+                                    // 日期，10 年要跑半小时以上（docs/时序检索为什么慢.md）。
+                                    // 默认值应该是"点下去能等到结果"的那个量级。
+                                    text: "2023"
+                                    Layout.fillWidth: true
+                                    font.pixelSize: Theme.fontCaption
+                                    implicitHeight: 28
+                                    horizontalAlignment: TextInput.AlignRight
+                                }
+                                Text {
+                                    text: "–"
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.fontCaption
+                                }
+                                StyledField {
+                                    id: year1Field
+                                    objectName: "year1Field"
+                                    text: "2025"
+                                    Layout.fillWidth: true
+                                    font.pixelSize: Theme.fontCaption
+                                    implicitHeight: 28
+                                    horizontalAlignment: TextInput.AlignRight
+                                }
+                            }
                         }
                     }
 
                     // 代价提示：联网读一景 9–30 s，一年 15–25 个日期。
                     // 不给这个数，用户会以为"等 10 分钟没反应"是程序卡了。
-                    Label {
+                    Text {
                         objectName: "seriesCostLabel"
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
-                        font.pixelSize: 11
-                        color: "#5f6368"
+                        font.pixelSize: Theme.fontCaption
+                        color: Theme.textMuted
                         text: "联网读景，每年约 1–4 分钟（单景 9–30 秒）。"
                               + "每年数越多越慢，建议先跑 1 年看看。"
                     }
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Button {
+                        spacing: Theme.gapSm
+
+                        StyledButton {
                             id: seriesButton
                             objectName: "seriesButton"
+                            variant: "primary"
                             text: "检索时序"
+                            Layout.fillWidth: true
                             enabled: !app.busyExtract && !app.busySeries
                             onClicked: app.buildSeries(
                                 [Number(x0Field.text), Number(y0Field.text),
                                  Number(x1Field.text), Number(y1Field.text)],
                                 parseInt(year0Field.text), parseInt(year1Field.text))
                         }
-                        BusyIndicator { running: app.busySeries; visible: running }
+                        BusyIndicator {
+                            running: app.busySeries
+                            visible: running
+                            implicitWidth: 26
+                            implicitHeight: 26
+                        }
                         // 取消入口：分钟级联网检索必须可以中止（worker.py 的
                         // SeriesWorker.cancel 本来就有，缺的是够得着的按钮）。
                         // 只在检索进行中出现；能否立即停取决于回调间隙，
                         // 诚实语义由 SeriesWorker.cancel() 的 docstring 交代。
-                        Button {
+                        StyledButton {
                             id: cancelSeriesButton
                             objectName: "cancelSeriesButton"
-                            text: "取消检索"
+                            variant: "secondary"
+                            text: "取消"
                             visible: app.busySeries
                             onClicked: app.cancelSeries()
                         }
-                        Item { Layout.fillWidth: true }
                     }
 
                     // 分隔线
-                    Rectangle { Layout.fillWidth: true; height: 1; color: "#e8eaed" }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.topMargin: Theme.gapSm
+                        height: 1
+                        color: Theme.divider
+                    }
 
-                    // ---- 最新观测（联网，秒级到十几秒）----
+                    // ---- 区块 3：最新观测（联网，秒级到十几秒）----
                     // 名字一律叫「最新观测」，不叫"实时"：Sentinel-2 重访 5 天 +
                     // L2A 处理 1–3 天，叫实时是承诺做不到的事（docs/最新观测契约.md）。
                     // 这里最要紧的是数据新鲜度：观测日期 + 距今 N 天永远显示，
                     // 且"没量到"绝不显示成 0.00 km²（NaN 走单独一条文案）。
-                    Label {
-                        text: "最新观测（联网）"
-                        font.bold: true
-                        font.pixelSize: 14
-                        color: "#202124"
+                    SectionHeader {
+                        Layout.topMargin: Theme.gapSm
+                        title: "最新观测"
+                        subtitle: "拉取最近一景，影像直接上地图"
+                    }
+
+                    StyledButton {
+                        id: latestButton
+                        objectName: "latestButton"
+                        variant: "secondary"
+                        text: "刷新最新观测"
+                        Layout.fillWidth: true
+                        enabled: !app.busyExtract && !app.busySeries && !app.latestBusy
+                        onClicked: app.refreshLatest(
+                            [Number(x0Field.text), Number(y0Field.text),
+                             Number(x1Field.text), Number(y1Field.text)],
+                            app.latestLookbackDays)
                     }
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Button {
-                            id: latestButton
-                            objectName: "latestButton"
-                            text: "刷新最新观测"
-                            enabled: !app.busyExtract && !app.busySeries && !app.latestBusy
-                            onClicked: app.refreshLatest(
-                                [Number(x0Field.text), Number(y0Field.text),
-                                 Number(x1Field.text), Number(y1Field.text)],
-                                app.latestLookbackDays)
-                        }
-                        BusyIndicator { running: app.latestBusy; visible: running }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    // 加载中提示（照 seriesButton 的处理：busy 时显示一行）
-                    Label {
-                        objectName: "latestLoadingLabel"
-                        Layout.fillWidth: true
+                        spacing: Theme.gapSm
                         visible: app.latestBusy
-                        text: "正在检索最新影像 …"
-                        wrapMode: Text.Wrap
-                        font.pixelSize: 11
-                        color: "#5f6368"
+
+                        BusyIndicator {
+                            running: app.latestBusy
+                            visible: running
+                            implicitWidth: 22
+                            implicitHeight: 22
+                        }
+                        Text {
+                            objectName: "latestLoadingLabel"
+                            Layout.fillWidth: true
+                            text: "正在检索最新影像 …"
+                            wrapMode: Text.Wrap
+                            font.pixelSize: Theme.fontCaption
+                            color: Theme.textSecondary
+                        }
                     }
 
                     // 结果区。三种状态分开措辞：
                     //   a) 没观测（latestAgeDays < 0）  -> "暂无可用观测"
                     //   b) 有观测但没量到面积（NaN）    -> "面积没量到（无水面信号）" + 季节警告
                     //   c) 正常                          -> 日期 / 距今天数 / 面积 / 湖泊数
-                    ColumnLayout {
+                    Rectangle {
                         objectName: "latestPanel"
                         Layout.fillWidth: true
                         visible: !app.latestBusy && app.latestAgeDays >= 0
-                        spacing: 2
+                        implicitHeight: latestCol.implicitHeight + 16
+                        radius: Theme.radiusSm
+                        color: "#f8fafc"
+                        border.width: 1
+                        border.color: Theme.divider
 
-                        // 新鲜度：日期 + 距今 N 天。这是本功能诚实性的核心。
-                        Label {
-                            objectName: "latestFreshnessLabel"
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
-                            font.pixelSize: 12
-                            font.bold: true
-                            color: "#202124"
-                            text: "观测日期 " + app.latestDate
-                                  + "　距今 " + app.latestAgeDays + " 天"
-                        }
+                        ColumnLayout {
+                            id: latestCol
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 3
 
-                        Label {
-                            objectName: "latestAreaLabel"
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
-                            font.pixelSize: 12
-                            // NaN 判断：QML 里 Number.isNaN 最稳；面积没量到时
-                            // 绝不显示 0.00 km²（缺数据返回 None 的项目硬规矩）。
-                            color: Number.isNaN(app.latestAreaKm2) ? "#b3261e" : "#1e8e3e"
-                            text: Number.isNaN(app.latestAreaKm2)
-                                  ? "面积没量到（无水面信号）"
-                                  : "当前面积 " + Number(app.latestAreaKm2).toFixed(4)
-                                    + " km²　湖泊 " + app.latestNLakes + " 个"
-                        }
+                            // 新鲜度：日期 + 距今 N 天。这是本功能诚实性的核心。
+                            Text {
+                                objectName: "latestFreshnessLabel"
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
+                                font.pixelSize: Theme.fontCaption
+                                font.bold: true
+                                color: Theme.textPrimary
+                                text: "观测日期 " + app.latestDate
+                                      + "　距今 " + app.latestAgeDays + " 天"
+                            }
 
-                        Label {
-                            objectName: "latestMessageLabel"
-                            Layout.fillWidth: true
-                            visible: app.latestMessage !== ""
-                            wrapMode: Text.Wrap
-                            font.pixelSize: 11
-                            color: "#b3261e"
-                            text: app.latestMessage
+                            Text {
+                                objectName: "latestAreaLabel"
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
+                                font.pixelSize: Theme.fontBody
+                                font.bold: true
+                                // NaN 判断：QML 里 Number.isNaN 最稳；面积没量到时
+                                // 绝不显示 0.00 km²（缺数据返回 None 的项目硬规矩）。
+                                color: Number.isNaN(app.latestAreaKm2)
+                                       ? Theme.danger : Theme.success
+                                text: Number.isNaN(app.latestAreaKm2)
+                                      ? "面积没量到（无水面信号）"
+                                      : "当前面积 " + Number(app.latestAreaKm2).toFixed(4)
+                                        + " km²　湖泊 " + app.latestNLakes + " 个"
+                            }
+
+                            Text {
+                                objectName: "latestMessageLabel"
+                                Layout.fillWidth: true
+                                visible: app.latestMessage !== ""
+                                wrapMode: Text.Wrap
+                                font.pixelSize: Theme.fontCaption
+                                color: Theme.warning
+                                text: app.latestMessage
+                            }
                         }
                     }
 
                     // a) 没观测：明确说"暂无可用观测"，不说"没有湖"
-                    Label {
+                    Text {
                         objectName: "latestEmptyLabel"
                         Layout.fillWidth: true
                         visible: !app.latestBusy && app.latestAgeDays < 0
                                  && app.latestMessage !== ""
                         wrapMode: Text.Wrap
-                        font.pixelSize: 11
-                        color: "#5f6368"
+                        font.pixelSize: Theme.fontCaption
+                        color: Theme.textMuted
                         text: app.latestMessage
                     }
 
                     Item { Layout.fillHeight: true }  // 弹性占位，把提示顶到面板底部
 
-                    Label {
+                    // 底部说明条：改版前是一段裸文字，和输入框混在一起。
+                    // 装进浅色小框后，视觉上明确"这是注记，不是可操作项"。
+                    Rectangle {
                         Layout.fillWidth: true
-                        text: "提示：默认影像（2025-09-30 小景）湖面冰封/高浊度，"
-                              + "NDWI 最高约 0.167，阈值 0.15 下提取 0 条属正常结果，"
-                              + "可降低阈值重试。"
-                        wrapMode: Text.Wrap
-                        font.pixelSize: 11
-                        color: "#5f6368"
+                        Layout.topMargin: Theme.gapSm
+                        implicitHeight: hintText.implicitHeight + 14
+                        radius: Theme.radiusSm
+                        color: Theme.warningSoft
+
+                        Text {
+                            id: hintText
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            text: "默认影像（2025-09-30 小景）湖面冰封/高浊度，"
+                                  + "NDWI 最高约 0.167，阈值 0.15 下提取 0 条属正常结果，"
+                                  + "可降低阈值重试。"
+                            wrapMode: Text.Wrap
+                            font.pixelSize: Theme.fontCaption
+                            color: Theme.warning
+                        }
                     }
                     }
                 }
             }
 
             // ---- 中：地图（铺满剩余宽度） ----
-            MapView {
+            Card {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumWidth: 240
+                padding: 0
+
+                // Card 的白底会被地图自己的深色底盖住，所以这里把卡片
+                // 当成"圆角裁剪容器"用：地图铺满，圆角由 Card 提供。
+                MapView {
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    radius: Theme.radiusMd - 1
+                }
             }
         }
 
-        // ---- 底：时序曲线 / 湖泊列表切换 ----
-        Rectangle {
+        // ================================================================
+        // 底部：时序曲线 / 湖泊列表
+        // ================================================================
+        Card {
             Layout.fillWidth: true
-            Layout.preferredHeight: 330
-            color: "white"
-            radius: 6
+            Layout.preferredHeight: 340
+            Layout.leftMargin: Theme.gapMd
+            Layout.rightMargin: Theme.gapMd
+            Layout.bottomMargin: Theme.gapMd
+            padding: 0
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 6
+                anchors.margins: 1
                 spacing: 0
 
+                // 页签自绘：改版前是原生 TabBar，指示条细且灰，选中态不明显。
                 TabBar {
                     id: bottomBar
                     objectName: "bottomBar"
                     Layout.fillWidth: true
+
+                    background: Rectangle {
+                        color: Theme.panelBg
+                        // 底部细线，和内容区分开
+                        Rectangle {
+                            anchors.bottom: parent.bottom
+                            width: parent.width
+                            height: 1
+                            color: Theme.divider
+                        }
+                    }
+
                     // 页签带 objectName：冒烟需要真实点击切页后再驱动表格联动
-                    TabButton { objectName: "tabSeries"; text: "面积时序" }
-                    TabButton { objectName: "tabTable"; text: "湖泊列表" }
+                    TabButton {
+                        objectName: "tabSeries"
+                        text: "面积时序"
+                        implicitHeight: 38
+                        implicitWidth: 108
+
+                        contentItem: Text {
+                            text: parent.text
+                            font.pixelSize: Theme.fontBody
+                            font.bold: parent.checked
+                            color: parent.checked ? Theme.accent : Theme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Item {
+                            // 选中指示条：底部 2px 强调色
+                            Rectangle {
+                                anchors.bottom: parent.bottom
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: parent.width * (parent.parent.checked ? 0.72 : 0)
+                                height: 2
+                                radius: 1
+                                color: Theme.accent
+                                Behavior on width { NumberAnimation { duration: 140 } }
+                            }
+                        }
+                    }
+                    TabButton {
+                        objectName: "tabTable"
+                        text: "湖泊列表"
+                        implicitHeight: 38
+                        implicitWidth: 108
+
+                        contentItem: Text {
+                            text: parent.text
+                            font.pixelSize: Theme.fontBody
+                            font.bold: parent.checked
+                            color: parent.checked ? Theme.accent : Theme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Item {
+                            Rectangle {
+                                anchors.bottom: parent.bottom
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: parent.width * (parent.parent.checked ? 0.72 : 0)
+                                height: 2
+                                radius: 1
+                                color: Theme.accent
+                                Behavior on width { NumberAnimation { duration: 140 } }
+                            }
+                        }
+                    }
                 }
 
                 StackLayout {
@@ -441,48 +765,57 @@ ApplicationWindow {
     // 用普通 Rectangle 而不是 Frame 定制 background：原生样式（Windows）不支持
     // 定制 Controls 的背景件，会打 "does not support customization" 警告。
     footer: Rectangle {
-        implicitHeight: 30
-        color: "#e8eaed"
+        implicitHeight: 32
+        color: Theme.footerBg
+
+        Rectangle {
+            anchors.top: parent.top
+            width: parent.width
+            height: 1
+            color: Theme.panelBorder
+        }
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 10
-            anchors.rightMargin: 10
-            spacing: 16
+            anchors.leftMargin: Theme.gapLg
+            anchors.rightMargin: Theme.gapLg
+            spacing: Theme.gapLg
 
-            Label {
+            Text {
                 objectName: "statusCoord"
                 text: window.coordText
-                font.pixelSize: 12
-                color: "#202124"
+                font.pixelSize: Theme.fontCaption
+                color: Theme.textSecondary
             }
-            Label {
+            Text {
                 objectName: "statusPoint"
                 text: window.pointText
-                font.pixelSize: 12
-                color: "#1a56b0"
+                font.pixelSize: Theme.fontCaption
+                color: Theme.accent
             }
             // 选中湖风险摘要（等级 + 判据值，_apply_series_result 判定回流）。
             // 无选中/未判定为 "" 整个隐藏；配色保持中性——等级语义色由表格
             // 色块与地图多边形承担，状态栏不再涂一遍，避免 LOW 也被衬红。
-            Label {
+            Text {
                 objectName: "statusRisk"
                 visible: app.selectedLakeRisk !== ""
                 text: app.selectedLakeLabel !== ""
                       ? app.selectedLakeLabel + "　" + app.selectedLakeRisk
                       : app.selectedLakeRisk
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontCaption
                 font.bold: true
-                color: "#202124"
+                color: Theme.textPrimary
                 elide: Text.ElideMiddle
                 Layout.maximumWidth: 480
             }
             Item { Layout.fillWidth: true }
-            Label {
+            Text {
                 objectName: "statusProgress"
                 text: app.progressText
-                font.pixelSize: 12
-                color: "#5f6368"
+                font.pixelSize: Theme.fontCaption
+                color: Theme.textMuted
+                elide: Text.ElideRight
+                Layout.maximumWidth: 420
             }
         }
     }

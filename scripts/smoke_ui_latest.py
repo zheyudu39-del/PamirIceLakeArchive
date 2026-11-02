@@ -44,7 +44,8 @@ os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 
 from PySide6.QtCore import QObject, QUrl  # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication
+from PySide6.QtQuickControls2 import QQuickStyle  # noqa: E402
 
 from glof.core import latest as core_latest  # noqa: E402
 from glof.core.latest import LatestObservation  # noqa: E402
@@ -175,6 +176,8 @@ def label_visible(win: QObject, name: str) -> bool:
 
 def main() -> int:
     app = QApplication.instance() or QApplication([])
+    # 与 glof/ui/__main__.py 一致：原生样式不支持控件定制
+    QQuickStyle.setStyle("Fusion")
 
     fake = FakeFetch()
     original = core_latest.fetch_latest

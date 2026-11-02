@@ -28,6 +28,11 @@ Rectangle {
 
     color: "#111418"
 
+    // 圆角裁剪：Flickable 里的 Image 会画到父级圆角之外，不加 clip
+    // 左上角会是直角（实测）。clip 对圆角矩形同样生效。
+    radius: 7
+    clip: true
+
     // ---- 来自 MapController 的状态（全 NOTIFY，绑定自动刷新） ----
     readonly property int imageWidth: app.map ? app.map.imageWidth : 0
     readonly property int imageHeight: app.map ? app.map.imageHeight : 0
